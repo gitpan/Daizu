@@ -1,0 +1,9 @@
+<ul>
+ [%- FOREACH item = items %]
+  <li[% IF item.link %]><a href="[% item.link |html %]">[% item.short_title |encode |html %]</a>[% ELSE %] class="current">[% item.short_title |encode |html %][% END %]
+   [%- IF item.children.size %]
+    [% INCLUDE nav_menu_sub.tt items = item.children %]
+   [% END -%]
+  </li>
+ [% END -%]
+</ul>

@@ -1,0 +1,214 @@
+body {
+	margin: 0;
+	color: #000;
+	background: #F6FBFF none;
+	font-family: "Times New Roman", Times, serif;
+}
+
+h2, h3 {
+	margin-bottom: 0;
+}
+
+h3 a {
+	text-decoration: none;
+}
+
+p {
+	margin-top: 0.5ex;
+}
+
+/* Make visited and unvisited links blue and purple, Netscape style.
+ * Hovered and 'active' links are a nice cyan.
+ */
+a:link    { color: #00F; background: #F6FBFF none; }
+a:visited { color: #909; background: #F6FBFF none; }
+a:hover   { color: #09F; background: #F6FBFF none; }
+a:active  { color: #09F; background: #F6FBFF none; }
+
+#header h1 {
+	margin: 1ex 1em;
+}
+#header h1 a {
+	text-decoration: none;
+}
+
+#all-cols {
+	position: relative;
+	padding-bottom: 1em;
+}
+
+#content-col {
+	margin-left: 10em;
+	margin-right: 10em;
+	padding-left: 0.5em;
+	padding-right: 0.5em;
+}
+
+#navigation-col, #extras-col {
+	position: absolute;
+	top: 0px;
+	font-size: 90%;
+	width: 9.5em;
+	padding-bottom: 1em;
+}
+
+#navigation-col {
+	left: 0.5em;
+	border-right: solid 1px #004780;
+	padding-right: 0.5em;
+}
+
+#extras-col {
+	right: 0.5em;
+	border-left: solid 1px #004780;
+	padding-left: 0.5em;
+}
+
+#footer {
+	font-size: 75%;
+	margin-top: 3em;
+	text-align: center;
+}
+
+/* Lists in the left and right columns */
+#navigation-col ul, #navigation-col ol, #extras-col ul, #extras-col ol {
+	list-style-type: none;
+	padding-left: 0;
+	margin-left: 0;
+}
+#navigation-col * ul, #navigation-col * ol, #extras-col * ul, #extras-col * ol {
+	padding-left: 1ex;
+	margin-left: 1ex;
+}
+#navigation-col a, #extras-col a {
+	text-decoration: none;
+}
+#navigation-col li, #extras-col li {
+	margin-top: 0.5ex;
+}
+#navigation-col .current, #extras-col .current {
+	font-weight: bold;
+}
+#navigation-col .current ul, #extras-col .current ul {
+	font-weight: normal;
+}
+
+/* Indent 'pre' blocks, give them a different background color, and put a
+ * blue fade on the left hand side.
+ */
+pre, blockquote {
+	margin: 1ex 0 1.5ex 1ex;
+	padding: 0.5ex 0.5ex 0.5ex 30px;
+	background-color: white;
+	background-image: url(block-fade.png);
+	background-position: 0 0;
+	background-repeat: repeat-y;
+}
+pre {
+	font-family: monospace;
+}
+
+td, th {
+	vertical-align: top;
+}
+
+dt {
+	padding-top: 1ex;
+	font-weight: bold;
+}
+
+img {
+	border: none;
+}
+
+#content-col .entry-meta p {
+	margin-left: 1em;
+	font-size: 90%;
+}
+
+.entry-content p {
+	text-align: justify;
+}
+
+.entry-content table {
+	border-collapse: collapse;
+	margin: 1ex 4ex 1.5ex;
+}
+
+.entry-content td, .entry-content th {
+	padding: 0.5ex;
+	background: #FFF none;
+	border: solid 1px #004780;
+}
+
+.entry-content th {
+	text-align: center;
+}
+
+/* Turn off the dotted underline on <abbr> when it's used in the
+ * datetime microformat design pattern, because it's distracting and
+ * the title is just an unambiguous version of the time, and so is
+ * unlikely to be interesting to users.  */
+abbr.published, abbr.updated {
+	border-bottom: none;
+}
+
+.no-css {
+	display: none;
+}
+
+/* Syntax coloring, from Text::VimColor. */
+span.synComment    { color: #0000FF }
+span.synConstant   { color: #FF00FF }
+span.synIdentifier { color: #008B8B }
+span.synStatement  { color: #A52A2A ; font-weight: bold }
+span.synPreProc    { color: #A020F0 }
+span.synType       { color: #2E8B57 ; font-weight: bold }
+span.synSpecial    { color: #6A5ACD }
+span.synUnderlined { color: #000000 ; text-decoration: underline }
+span.synError      { color: #FFFFFF ; background: #FF0000 none }
+span.synTodo       { color: #0000FF ; background: #FFFF00 none }
+
+/* Articles */
+.entry-meta p {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+.entry-summary {
+	color: #444;
+}
+
+.next-prev {
+	font-size: 90%;
+	text-align: center;
+	margin-top: 1ex;
+	margin-bottom: 1ex;
+}
+.next-prev a {
+	text-decoration: none;
+	margin: 0 0.5em;
+}
+
+/* Blog archive pages */
+#blog-index ul {
+	list-style: none;
+}
+#blog-index li {
+	margin-bottom: 1ex;
+}
+#blog-index li a {
+	margin-right: 1em;
+}
+
+/* PictureArticle plugin */
+.daizu-main-thumbnail {
+	margin: 2ex 1ex;
+	text-align: center;
+}
+.daizu-main-thumbnail img {
+	background-color: #FFF;
+	border: 1px solid #004780;
+	margin-bottom: 1ex;
+}
+
+/* vi:set ts=8 sw=8 noexpandtab: */

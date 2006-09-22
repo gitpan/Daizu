@@ -1,0 +1,5 @@
+[% IF head_links %][% FOR link = head_links -%]
+ <link rel="[% link.key %]" href="[% link.value.href.rel(url.url) |html %]"
+       type="[% link.value.type |html %]"[% IF link.value.title
+    %] title="[% link.value.title |encode |html %]"[% END %]>
+[% END %][% END %]

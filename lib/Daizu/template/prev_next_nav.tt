@@ -1,0 +1,5 @@
+[% IF head_links.prev || head_links.next %]<p class="next-prev">
+ [% IF head_links.prev %]<a href="[% head_links.prev.href.rel(url.url) |html %]">&lt;&nbsp;[% head_links.prev.title |encode |html %]</a>[% END %]
+ [% IF head_links.prev && head_links.next %] | [% END %]
+ [% IF head_links.next %]<a href="[% head_links.next.href.rel(url.url) |html %]">[% head_links.next.title |encode |html %]&nbsp;&gt;</a>[% END %]
+</p>[% END %]
