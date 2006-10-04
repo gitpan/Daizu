@@ -17,7 +17,7 @@ use Carp::Assert qw( assert DEBUG );
 use Daizu::Util qw(
     like_escape
     validate_uri db_datetime
-    db_row_exists db_select db_insert db_update
+    db_row_exists db_select db_insert db_update transactionally
     mint_guid
 );
 
@@ -54,31 +54,32 @@ This can also be called as a method on a L<Daizu> object.
 sub load_revision
 {
     my ($cms, $desired_rev) = @_;
-    my $db = $cms->{db};
-    my $ra = $cms->{ra};
-
     croak "bad revision number r$desired_rev"
         if defined $desired_rev && $desired_rev < 1;
 
-    $db->begin_work;
+    return transactionally($cms->{db}, \&_load_revision_txn,
+                           $cms, $desired_rev);
+}
+
+sub _load_revision_txn
+{
+    my ($cms, $desired_rev) = @_;
+    my $db = $cms->{db};
+    my $ra = $cms->{ra};
 
     my $latest_rev = $ra->get_latest_revnum;
     $desired_rev = $latest_rev
         unless defined $desired_rev;
-    if ($desired_rev > $latest_rev) {
-        $db->rollback;
-        croak "can't load up to r$desired_rev, latest revision is r$latest_rev";
-    }
+    croak "can't load up to r$desired_rev, latest revision is r$latest_rev"
+        if $desired_rev > $latest_rev;
 
     my $last_known_rev = db_select($db, revision => {}, 'max(revnum)');
     $last_known_rev ||= 0;
     assert($last_known_rev <= $latest_rev) if DEBUG;
 
     # Return quickly if there's nothing to do.
-    if ($last_known_rev >= $desired_rev) {
-        $db->rollback;
-        return $last_known_rev;
-    }
+    return $last_known_rev
+        if $last_known_rev >= $desired_rev;
 
     my $branches = known_branches($db);
     my $trunk_id = $branches->{trunk};
@@ -165,7 +166,6 @@ sub load_revision
             if @added || @copied || @deleted;
     }
 
-    $db->commit;
     return $desired_rev;
 }
 
@@ -320,6 +320,7 @@ sub _adjust_custom_uri
     my ($ra, $db, $path, $revnum, $guid) = @_;
 
     my $full_path = $path eq '' ? 'trunk' : "trunk/$path";
+    return unless $ra->stat($full_path, $revnum);   # not present in trunk
     my (undef, $props) = $ra->get_file($full_path, $revnum, undef);
 
     if (exists $props->{'daizu:guid'}) {

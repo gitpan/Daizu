@@ -4,7 +4,6 @@ use strict;
 
 use base 'Exporter';
 our @EXPORT_OK = qw(
-    parse_xhtml_content
     dom_body_to_html4 dom_node_to_html4 dom_body_to_text
     dom_filtered_for_feeds
     absolutify_links
@@ -14,15 +13,10 @@ our @EXPORT_OK = qw(
 use XML::LibXML;
 use HTML::Tagset;
 use URI;
-use File::Temp qw( tempfile );
 use Encode qw( encode );
 use Carp qw( croak );
 use Carp::Assert qw( assert DEBUG );
-use Daizu::Util qw(
-    trim url_encode
-    db_select wc_file_data
-    daizu_data_dir
-);
+use Daizu::Util qw( trim );
 
 =head1 NAME
 
@@ -34,109 +28,6 @@ The following functions are available for export from this module.
 None of them are exported by default.
 
 =over
-
-=item parse_xhtml_content($cms, $wc_id, $path, $data)
-
-Parse the fragment of XHTML content provided in the scalar reference
-C<$data>, which is associated with the file at C<$path> in working
-copy C<$wc_id>.  Returns an XHTML DOM structure as an
-L<XML::LibXML::Document> object, whose root element will be C<body>.
-
-=cut
-
-sub parse_xhtml_content
-{
-    my ($cms, $wc_id, $path, $data) = @_;
-    croak "parse_xhtml_content expects encoded UTF-8 data, not a text string"
-        if utf8::is_utf8($$data);
-
-    my $parser = XML::LibXML->new;
-    $parser->pedantic_parser(1);
-    $parser->validation(0);
-    $parser->expand_xinclude(1);
-    $parser->line_numbers(1);
-
-    my $input_callbacks = XML::LibXML::InputCallback->new;
-    $input_callbacks->register_callbacks([
-        \&_match_uri,
-        sub { _open_uri($cms, $wc_id, @_) },
-        \&_read_uri,
-        \&_close_uri,
-    ]);
-    $parser->input_callbacks($input_callbacks);
-
-    my $doc;
-    my ($fh, $tmpfilename) = tempfile();
-    eval {
-        my $xml_dir = url_encode(daizu_data_dir('xml'));
-        $path = url_encode($path);
-        binmode $fh
-            or die "error setting file to binary mode: $!";
-        print $fh
-            '<?xml version="1.0" encoding="UTF-8"?>',
-            qq{<!DOCTYPE body SYSTEM "file://$xml_dir/xhtml-entities.dtd">},
-            qq{<body xml:base="daizu:///$path"},
-                   ' xmlns="http://www.w3.org/1999/xhtml"',
-                   ' xmlns:xi="http://www.w3.org/2001/XInclude"',
-                 qq{ xmlns:daizu="$Daizu::HTML_EXTENSION_NS">},
-            $$data,
-            '</body>';
-        close $fh
-            or croak "error closing temp file '$tmpfilename': $!";
-
-        $doc = $parser->parse_file($tmpfilename);
-    };
-
-    my $err = $@;
-    unlink $tmpfilename
-        or warn "error deleting temp file '$tmpfilename': $!";
-    die "error parsing XHTML content of '$path': $err" if $err;
-
-    return $doc;
-}
-
-
-sub _match_uri
-{
-    my ($uri) = @_;
-    return $uri =~ /^daizu:/i;
-}
-
-sub _open_uri
-{
-    my ($cms, $wc_id, $uri) = @_;
-
-    my $path = $uri;
-    $path =~ s!^daizu:/*!!i;
-    my ($file_id, $is_dir) = db_select($cms->{db}, 'wc_file',
-        { wc_id => $wc_id, path => $path },
-        'id', 'is_dir',
-    );
-    croak "can't read '$uri' from XML file, it's a directory"
-        if $is_dir;
-
-    my $data = wc_file_data($cms->{db}, $file_id);
-    open my $fh, '<', $data
-        or die "error opening in-memory file to read '$uri': $!";
-
-    return $fh;
-}
-
-sub _read_uri
-{
-    my ($fh, $length) = @_;
-    my $buffer;
-    my $ret = read $fh, $buffer, $length;
-    die "error reading from file: $!"
-        unless defined $ret;
-    return $buffer;
-}
-
-sub _close_uri
-{
-    my ($fh) = @_;
-    close $fh;
-}
 
 =item dom_body_to_html4($doc, [$start_node], [$end_node])
 
@@ -538,8 +429,8 @@ to fail.  They shouldn't be there by the time the content is being output
 anyway.
 
 Both C<$doc> and the return value are L<XML::LibXML::Document> objects
-of the kind returns be
-L<parse_xhtml_content()|/parse_xhtml_content($cms, $wc_id, $path, $data)>.
+of the kind returned by
+L<the article_doc() method in Daizu::File|Daizu::File/$file-E<gt>article_doc>.
 The original DOM in C<$doc> is not altered.  The return value is a
 completely independent copy.
 
@@ -576,7 +467,10 @@ sub _node_filtered_for_feeds
         my $elem_name = $node->localname;
         return if $elem_name =~ /^(script|style)$/i;
 
-        if ($elem_name eq 'span') {
+        if ($elem_name eq 'span' ||
+            ($elem_name eq 'a' && !$node->hasAttribute('href')))
+        {
+            # Strip the element out but retain its content.
             return map { _node_filtered_for_feeds($_) } $node->childNodes;
         }
         else {
@@ -585,7 +479,7 @@ sub _node_filtered_for_feeds
             for my $attr ($node->attributes) {
                 next unless $attr->nodeType == XML::LibXML::XML_ATTRIBUTE_NODE;
                 my $attr_name = $attr->localname;
-                next if $attr_name =~ /^(class|style|on.*)$/i;
+                next if $attr_name =~ /^(class|style|on.*|id|name)$/i;
                 $out_elem->setAttribute($attr_name => $attr->value);
             }
 

@@ -7,10 +7,12 @@ use strict;
 
 use constant BAD_CONFIG_TEST_FILES => 7;
 
-use Test::More tests => 2 * BAD_CONFIG_TEST_FILES + 67;
+use Test::More;
 use Path::Class qw( file );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
+
+init_tests(2 * BAD_CONFIG_TEST_FILES + 67);
 
 # Test a series of bad config files, which each have the expected error
 # message embedded inside in a comment.
@@ -98,10 +100,10 @@ is($cms->{property_loaders}{'*'}[0][0], $cms,
    'property loader object');
 is($cms->{property_loaders}{'*'}[0][1], '_std_property_loader',
    'property loader method');
-is(scalar keys %{$cms->{article_parsers}}, 4,
-   'number of article parser patterns');
-is(scalar @{$cms->{article_parsers}{$_}{''}}, 1,
-   "number of article parsers for pattern '$_'")
+is(scalar keys %{$cms->{article_loaders}}, 4,
+   'number of article loader patterns');
+is(scalar @{$cms->{article_loaders}{$_}{''}}, 1,
+   "number of article loaders for pattern '$_'")
     for 'text/html', 'application/xhtml+xml',   # default ones
         'text/x-perl',                          # Daizu::Plugin::PodArticle
         'image/*';                              # Daizu::Plugin::PictureArticle

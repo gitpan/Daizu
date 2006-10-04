@@ -5,7 +5,7 @@ meta-spec:
     url: http://module-build.sourceforge.net/META-spec-v1.2.html
 
 name: Daizu
-version: 0.1
+version: 0.2
 abstract: Web publishing system built on Subversion
 license: gpl
 
@@ -37,6 +37,7 @@ requires:
     XML::LibXML: 1.59
 
 build_requires:
+    Module::Build: 0
     IO::Scalar: 0
 
 optional_features:
@@ -48,6 +49,10 @@ optional_features:
         description: Publish pictures as articles, with automatic thumbnails
         requires:
             Image::Magick: 0
+
+no_index:
+    file:
+        - test-repos.dump
 
 dynamic_config: 0
 

@@ -25,18 +25,17 @@
  <output url="http://www.example.com/"
          path        ="/var/www/example.com"
          redirect-map="/var/www/example.com-redirect.map"
-         gone-map    ="/var/www/example.com-gone.map"
-         index-filename="index.shtml" />
+         gone-map    ="/var/www/example.com-gone.map" />
 
  <!-- The stuff in this <config> element will only apply to
       content at or below the specified path.
    -->
- <config path="example.org">
+ <config path="example.com">
 
   <!-- Use a different domain and date for creating GUID URIs
-       for content on the 'example.org' website.
+       for content on the 'example.com' website.
     -->
-  <guid-entity entity="example.org,2006-03" />
+  <guid-entity entity="example.com,2006-03" />
 
   <!-- Provide extra configuration for the Daizu::Gen generator,
        when it is used on a particular website, to enable the
@@ -46,8 +45,13 @@
    <google-sitemap />
   </generator>
 
- <!-- End of configuration specific to 'example.org'. -->
+ <!-- End of configuration specific to 'example.com'. -->
  </config>
+
+ <!-- You'll need at least one plugin to load articles from
+      files.  This one is for files which have XHTML fragments
+      as their content.  -->
+ <plugin class="Daizu::Plugin::XHTMLArticle" />
 
  <!-- Enable the syntax-highlighting plugin, which is supplied
       with Daizu CMS.  -->

@@ -1,13 +1,16 @@
 use warnings;
 use strict;
 
-use Test::More tests => 1;
+use Test::More;
 use Path::Class qw( file );
 use Carp::Assert qw( assert );
 use Daizu::Test qw(
+    init_tests test_config
     create_test_repos create_database
 );
 use Daizu::Util qw( db_insert );
+
+init_tests(1, 1);
 
 my $ra = create_test_repos();
 assert($ra);
@@ -51,8 +54,22 @@ db_insert($db, 'person_info',
         or die "error opening test config template file: $!";
     my $config = do { local $/; <$tmpl_file> };
 
-    $config =~ s/\@TEST_REPOS_URL\@/$Daizu::Test::TEST_REPOS_URL/g;
-    $config =~ s/\@TEST_DOCROOT_DIR\@/$Daizu::Test::TEST_DOCROOT_DIR/g;
+    {
+        my $test_config = test_config();
+        my $dbconf = 'dsn="' . _xml_esc($test_config->{'test-dsn'}) . '"';
+        for (qw( user password )) {
+            $dbconf .= " $_=\"" . _xml_esc($test_config->{"test-$_"}) . '"'
+                if exists $test_config->{"test-$_"}
+        }
+        $config =~ s/\@TEST_DATABASE_CONFIG\@/$dbconf/g;
+    }
+
+    {
+        my $test_repos_url = _xml_esc($Daizu::Test::TEST_REPOS_URL);
+        $config =~ s/\@TEST_REPOS_URL\@/$test_repos_url/g;
+        my $test_docroot_dir = _xml_esc($Daizu::Test::TEST_DOCROOT_DIR);
+        $config =~ s/\@TEST_DOCROOT_DIR\@/$test_docroot_dir/g;
+    }
 
     open my $config_file, '>', 'test-config.xml'
         or die "error opening test config file: $!";
@@ -61,5 +78,16 @@ db_insert($db, 'person_info',
 }
 
 ok(1, 'set up test database and repository');
+
+
+sub _xml_esc
+{
+    my ($s) = @_;
+    $s =~ s/&/&amp;/g;
+    $s =~ s/</&lt;/g;
+    $s =~ s/>/&gt;/g;
+    $s =~ s/"/&quot;/g;
+    return $s;
+}
 
 # vi:ts=4 sw=4 expandtab filetype=perl

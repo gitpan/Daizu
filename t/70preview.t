@@ -2,13 +2,15 @@
 use warnings;
 use strict;
 
-use Test::More tests => 2;
+use Test::More;
 use Path::Class qw( file );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Preview qw(
     adjust_preview_links_html adjust_preview_links_css
 );
+
+init_tests(2);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 

@@ -1,6 +1,6 @@
 [% SET tags = file.tags %]
-[% IF tags %]
- <div class="tags">
+[% IF tags.size %]
+ <div class="entry-tags">
   <h4>Tags:</h4>
   <ul>
    [% FOREACH tag = tags %]

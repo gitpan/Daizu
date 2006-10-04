@@ -309,7 +309,7 @@ sub add_entry
             add_xml_elem($author, name => 'Anonymous');
         }
 
-        for ($file->tags) {
+        for (@{$file->tags}) {
             add_xml_elem($entry, category => undef,
                 term => $_->{tag},
                 label => $_->{original_spelling},
@@ -359,7 +359,7 @@ sub add_entry
             }
         }
 
-        for ($file->tags) {
+        for (@{$file->tags}) {
             add_xml_elem($entry, category => $_->{tag});
         }
 

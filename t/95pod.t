@@ -6,11 +6,10 @@ use strict;
 # directory.  Prints a warning if no documentation was found (because that
 # probably means you should write some).
 
-use Test::More;
 use File::Find;
 use Pod::Checker;
 use File::Temp qw( tempfile );
-
+use Test::More;
 
 # Each test is for a particular '.pm' file, so we need to find how many
 # there are before we plan the tests.
@@ -18,7 +17,8 @@ my @pm;
 find({ wanted => \&wanted, no_chdir => 1 }, 'lib');
 
 # Programs which should also have POD.
-push @pm, 'bin/daizu', 'cgi/preview.cgi';
+push @pm, 'bin/daizu', 'cgi/preview.cgi',
+          'upgrade-0.1-0.2.pl', 'downgrade-0.2-0.1.pl';
 
 sub wanted
 {

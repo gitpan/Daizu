@@ -43,9 +43,14 @@ in the C<publish_job> table).
 sub create_publishing_job
 {
     my ($cms, $start_rev) = @_;
+    return transactionally($cms->{db}, \&_create_publishing_job_txn,
+                           $cms, $start_rev);
+}
 
+sub _create_publishing_job_txn
+{
+    my ($cms, $start_rev) = @_;
     my $db = $cms->{db};
-    $db->begin_work;
 
     my $live_wc = $cms->live_wc;
     my $latest_rev = $live_wc->current_revision;
@@ -171,7 +176,6 @@ sub create_publishing_job
         revnum => $latest_rev,
     );
 
-    $db->commit;
     return $job_id;
 }
 

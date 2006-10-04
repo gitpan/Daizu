@@ -2,11 +2,13 @@
 use warnings;
 use strict;
 
-use Test::More tests => 108;
+use Test::More;
 use Carp::Assert qw( assert );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Util qw( update_all_file_urls );
+
+init_tests(108);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $wc = $cms->live_wc;

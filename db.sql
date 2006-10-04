@@ -97,18 +97,28 @@ create table wc_file (
     constraint wc_file_cur_revnum_missing_chk
         check (cur_revnum is not null or (not modified and not deleted)),
 
-    -- Metadata stored in Subversion properties.
-    generator text
+    -- Class name of this file's generator.  Either directly from the
+    -- 'daizu:generator' property, or inherited from its parent, or taking
+    -- the default value.
+    generator text not null
         check (generator similar to '[\\_a-zA-Z][-\\_:a-zA-Z0-9]*[\\_a-zA-Z0-9]'),
-    base_url text
-        check (base_url similar to '[a-z][-+.a-z0-9]*:%'),
-    article boolean not null default false,
-    retired boolean not null default false,
+    -- Files which are their own root file have this set to NULL.  Other
+    -- files have it pointing to one of their ancestors, whichever is the
+    -- closest to have a 'daizu:generator' property.
+    root_file_id int references wc_file on delete cascade,
+
+    custom_url text     -- daizu:url
+        check (custom_url similar to '[a-z][-+.a-z0-9]*:%'),
+
+    article boolean not null default false,     -- 'article' type
+    retired boolean not null default false,     -- 'retired' flag
+    no_index boolean not null default false,    -- 'no-index' flag
 
     issued_at timestamp not null,
     modified_at timestamp not null,
 
     title text,
+    short_title text,
     description text,
     content_type text
         -- All ASCII characters allowed except 'tspecials' defined in RFC 2045.
@@ -160,7 +170,16 @@ create table wc_file (
                 ((data is not null and data_from_file_id is null) or
                  (data is null and data_from_file_id is not null)))),
     constraint wc_file_bad_empty_file_data_chk
-        check (is_dir or data_len > 0 or data is not null)
+        check (is_dir or data_len > 0 or data is not null),
+
+    -- These values are NULL for files which aren't articles.
+    article_pages_url text,     -- absolute URL, can be used as permalink
+    article_content text,
+    constraint wc_file_article_loaded_chk
+        check ((article and article_content is not null and
+                            article_pages_url is not null) or
+               (not article and article_content is null and
+                                article_pages_url is null))
 );
 create unique index wc_file_path_idx on wc_file (wc_id, path);
 
@@ -183,6 +202,30 @@ create table wc_file_tag (
     tag text not null references tag,   -- Canonicalized spelling.
     original_spelling text not null,    -- As specified in daizu:tags.
     primary key (file_id, tag)
+);
+
+create table wc_article_extra_url (
+    file_id int not null references wc_file on delete cascade,
+    url text not null,
+    content_type text not null
+        -- All ASCII characters allowed except 'tspecials' defined in RFC 2045.
+        check (content_type similar to '[-!#$\\%&''*+.0-9A-Z^\\_`a-z{|}~]+/[-!#$\\%&''*+.0-9A-Z^\\_`a-z{|}~]+'),
+    generator text not null
+        check (generator similar to '[\\_a-zA-Z][-\\_:a-zA-Z0-9]*[\\_a-zA-Z0-9]'),
+    method text not null
+        check (method similar to '[\\_a-zA-Z0-9]+'),
+    argument text not null default ''
+);
+
+create table wc_article_extra_template (
+    file_id int not null references wc_file on delete cascade,
+    filename text not null
+);
+
+create table wc_article_included_files (
+    file_id int not null references wc_file on delete cascade,
+    included_file_id int not null
+        references wc_file deferrable initially deferred
 );
 
 create table url (

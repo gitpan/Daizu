@@ -99,8 +99,8 @@ whatever other incompatibilities might be a problem.
 =item Daizu::Plugin::PodArticle-E<gt>register($cms, $whole_config, $plugin_config, $path)
 
 Called by Daizu CMS when the plugin is registered.  It registers the
-L<do_pod_parsing()|/$self-E<gt>do_pod_parsing($cms, $file)> method as
-an article parser for the MIME type 'text/x-perl'.
+L<load_article()|/$self-E<gt>load_article($cms, $file)> method as
+an article loader for the MIME type 'text/x-perl'.
 
 The configuration is currently ignored.
 
@@ -110,27 +110,26 @@ sub register
 {
     my ($class, $cms, $whole_config, $plugin_config, $path) = @_;
     my $self = bless {}, $class;
-    $cms->add_article_parser('text/x-perl', '', $self => 'do_pod_parsing');
+    $cms->add_article_loader('text/x-perl', '', $self => 'load_article');
 }
 
-=item $self-E<gt>do_pod_parsing($cms, $file)
+=item $self-E<gt>load_article($cms, $file)
 
 Does the actual parsing of the POD content of C<$file> (which should
-be a L<Daizu::File> object), and adds the approriate content and metadata
-to that object.  This will be called by Daizu CMS when
-it is called on to publish an article which happens to have Perl code
-as its source.
+be a L<Daizu::File> object), and returns the approriate content and metadata.
 
 Never rejects a file, and therefore always returns true.
 
 =cut
 
-sub do_pod_parsing
+sub load_article
 {
     my ($self, $cms, $file) = @_;
 
     # Use .html URL for the actual article.
     # TODO - this is mostly or exactly the same as the code in PictureArticle.
+    # TODO - it's also rather inefficient, because we're doing base_url when
+    # saving the article anyway, in Daizu::File.
     my $article_url = '';
     my $base_url = $file->generator->base_url($file);
     if ($base_url !~ m!/$!) {
@@ -138,40 +137,51 @@ sub do_pod_parsing
         $article_url =~ s!\.[^./]+$!.html!
             or $article_url .= '.html';
     }
-    $file->set_article_pages_url($article_url);
-
-    $file->init_article_doc;
 
     # Publish the source code too, and link to it from the article.
     # Currently this is only done for .pm files, since that's useful for
     # documentation of Perl modules, but you don't necessarily want it for
     # general purpose documents.
+    my @extra_url;
+    my @extra_template;
     if ($file->{name} =~ /\.pm$/i) {
-        $file->add_extra_url($file->{name}, 'text/x-perl', 'Daizu::Gen',
-                             'unprocessed');
-        $file->add_article_extras_template('plugin/podarticle_extras.tt');
+        push @extra_url, {
+            url => $file->{name},
+            type => 'text/x-perl',
+            generator => 'Daizu::Gen',
+            method => 'unprocessed',
+        };
+        push @extra_template, 'plugin/podarticle_extras.tt';
     }
 
     my $parser = Daizu::Plugin::PodArticle::Parser->new;
-    $parser->{daizu_curelem} = $file->article_body;
     $parser->{daizu_lists} = [];
     $parser->{first_cmd} = 1;
+
+    my $doc = XML::LibXML::Document->new('1.0', 'UTF-8');
+    my $body = $doc->createElementNS('http://www.w3.org/1999/xhtml', 'body');
+    $doc->setDocumentElement($body);
+    $parser->{daizu_curelem} = $body;
 
     open my $fh, '<', $file->data
         or die "error opening memory file: $!";
     $parser->parse_from_filehandle($fh);
 
+    my ($title, $short_title);
     if (defined $parser->{doc_title}) {
-        my $title = $parser->{doc_title};
-        $file->{title} = $title
-            unless defined $file->{title};
-        if ($title =~ /^\s*(\S+)\s+-+\s/) {
-            $file->{short_title} = $1
-                unless defined $file->property('daizu:short-title');
-        }
+        $title = $parser->{doc_title};
+        $short_title = $1
+            if $title =~ /^\s*(\S+)\s+-+\s/;
     }
 
-    return 1;
+    return {
+        content => $doc,
+        title => $title,
+        short_title => $short_title,
+        pages_url => $article_url,
+        extra_urls => \@extra_url,
+        extra_templates => \@extra_template,
+    };
 }
 
 =back
@@ -238,7 +248,7 @@ sub _do_heading
                       split ' ', $content[0];
     }
 
-    my $elem = 'h' . ($level + 1);
+    my $elem = 'h' . ($level + 2);
     die "$line_num: heading 'head$level' missing title"
         unless @content;
     die "$line_num: heading between =over and =item"

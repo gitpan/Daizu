@@ -2,12 +2,14 @@
 use warnings;
 use strict;
 
-use Test::More tests => 140;
+use Test::More;
 use Carp::Assert qw( assert );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Util qw( db_row_exists db_row_id db_select );
 use Daizu::Revision qw( file_guid );
+
+init_tests(140);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;

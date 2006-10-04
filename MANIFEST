@@ -1,9 +1,9 @@
 Build.PL
 COPYING
+Changes
 MANIFEST
 MANIFEST.SKIP
 META.yml
-NEWS
 README
 bin/daizu
 cgi/preview.cgi
@@ -12,6 +12,7 @@ config.xml
 content/style/block-fade.png
 content/style/site.css
 db.sql
+downgrade-0.2-0.1.pl
 lib/Daizu.pm
 lib/Daizu/Feed.pm
 lib/Daizu/File.pm
@@ -22,6 +23,7 @@ lib/Daizu/Plugin/HeaderAnchor.pm
 lib/Daizu/Plugin/PictureArticle.pm
 lib/Daizu/Plugin/PodArticle.pm
 lib/Daizu/Plugin/SyntaxHighlight.pm
+lib/Daizu/Plugin/XHTMLArticle.pm
 lib/Daizu/Preview.pm
 lib/Daizu/Publish.pm
 lib/Daizu/Publish/Editor.pm
@@ -39,6 +41,7 @@ lib/Daizu/template/article_meta/authors_pubdatetime.tt
 lib/Daizu/template/article_meta/description.tt
 lib/Daizu/template/article_meta/pubdatetime.tt
 lib/Daizu/template/article_pubdatetime.tt
+lib/Daizu/template/article_retired.tt
 lib/Daizu/template/article_tags.tt
 lib/Daizu/template/blog/article_meta.tt
 lib/Daizu/template/blog/head_meta.tt
@@ -47,6 +50,7 @@ lib/Daizu/template/blog/month_index.tt
 lib/Daizu/template/blog/year_index.tt
 lib/Daizu/template/extras_col.tt
 lib/Daizu/template/footer.tt
+lib/Daizu/template/head/html_decl.tt
 lib/Daizu/template/head/meta.tt
 lib/Daizu/template/head/page_title.tt
 lib/Daizu/template/head/styles.tt
@@ -69,6 +73,7 @@ t/00setup.t
 t/05config.t
 t/10load_revisions.t
 t/15html.t
+t/17articleloader.t
 t/20wc.t
 t/23util.t
 t/24file.t
@@ -87,6 +92,8 @@ t/data/05config/bad6.xml
 t/data/05config/bad7.xml
 t/data/15html/absolutify-expected.html
 t/data/15html/absolutify-input.html
+t/data/15html/feed-filter-expected.html
+t/data/15html/feed-filter-input.html
 t/data/15html/text-expected.txt
 t/data/15html/text-input.html
 t/data/70preview/expected.css
@@ -96,3 +103,5 @@ t/data/70preview/input.html
 t/data/fractal.png
 test-config.xml.tmpl
 test-repos.dump
+test.conf
+upgrade-0.1-0.2.pl

@@ -2,14 +2,16 @@
 use warnings;
 use strict;
 
-use Test::More tests => 87;
+use Test::More;
 use Carp::Assert qw( assert );
 use Encode qw( encode );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::File;
 use Daizu::Util qw( db_row_id db_select );
 use Daizu::HTML qw( dom_body_to_html4 );
+
+init_tests(87);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;
@@ -236,7 +238,7 @@ is($file_3->article_extract,
 
 # tags
 {
-    my @tags = $file_2->tags;
+    my @tags = @{$file_2->tags};
     is(scalar @tags, 2, 'tags: article 2, two tags');
     is($tags[0]{tag}, 'bar baz', 'tags: article 2, 1st tag');
     is($tags[0]{original_spelling}, 'Bar  Baz',
@@ -244,7 +246,7 @@ is($file_3->article_extract,
     is($tags[1]{tag}, 'foo', 'tags: article 2, 2nd tag');
     is($tags[1]{original_spelling}, 'foo', 'tags: article 2, 2nd spelling');
 
-    @tags = $file_5->tags;
+    @tags = @{$file_5->tags};
     is(scalar @tags, 0, 'tags: article 2, no tags');
 }
 

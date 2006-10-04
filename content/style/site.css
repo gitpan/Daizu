@@ -54,13 +54,13 @@ a:active  { color: #09F; background: #F6FBFF none; }
 
 #navigation-col {
 	left: 0.5em;
-	border-right: solid 1px #004780;
+	border-right: 1px solid #004780;
 	padding-right: 0.5em;
 }
 
 #extras-col {
 	right: 0.5em;
-	border-left: solid 1px #004780;
+	border-left: 1px solid #004780;
 	padding-left: 0.5em;
 }
 
@@ -121,6 +121,8 @@ img {
 	border: none;
 }
 
+/* The small text which appears under the heading for an article.
+ * Can include author tagline, description, etc.  */
 #content-col .entry-meta p {
 	margin-left: 1em;
 	font-size: 90%;
@@ -130,17 +132,18 @@ img {
 	text-align: justify;
 }
 
+/* Style tables specially, with borders shown.  This is partly to make
+ * them smarter, and partly to make you think twice if you try to use
+ * a table for layout inside an article.  */ 
 .entry-content table {
 	border-collapse: collapse;
 	margin: 1ex 4ex 1.5ex;
 }
-
 .entry-content td, .entry-content th {
 	padding: 0.5ex;
 	background: #FFF none;
-	border: solid 1px #004780;
+	border: 1px solid #004780;
 }
-
 .entry-content th {
 	text-align: center;
 }
@@ -153,21 +156,67 @@ abbr.published, abbr.updated {
 	border-bottom: none;
 }
 
+/* The box which appears on articles with the 'retired' flag, warning
+ * that the content may be out of date.  Make it stand out.  */
+.article-retired {
+	border: 2px solid #900;
+	background: #FFF none;
+	color: #000;
+	margin: 2ex;
+	padding: 1ex;
+}
+
+/* The box at the bottom of an article showing which folksonomy tags
+ * it has.  They make sense as a list, but display them inline to save
+ * space.  Clever browsers will get commas and full-stops punctuating
+ * them, but there's a bit of left margin to space them out as well, which
+ * will have to do for IE 6.  */
+.entry-tags {
+	border: 1px solid #004780;
+	background: #FFF;
+	margin: 1ex 1em;
+	padding: 1ex;
+}
+.entry-tags h4 {
+	font-size: 100%;
+	font-weight: bold;
+}
+.entry-tags h4, .entry-tags ul, .entry-tags li {
+	display: inline;
+}
+.entry-tags ul {
+	margin-left: 0;
+	padding-left: 0;
+}
+.entry-tags li {
+	margin-left: 1ex;
+}
+.entry-tags li:after {
+	content: ', ';
+}
+.entry-tags li:last-child:after {
+	content: '.';
+}
+.entry-tags a {
+	text-decoration: none;
+	background: #FFF none;
+}
+
 .no-css {
 	display: none;
 }
 
 /* Syntax coloring, from Text::VimColor. */
-span.synComment    { color: #0000FF }
-span.synConstant   { color: #FF00FF }
-span.synIdentifier { color: #008B8B }
-span.synStatement  { color: #A52A2A ; font-weight: bold }
-span.synPreProc    { color: #A020F0 }
-span.synType       { color: #2E8B57 ; font-weight: bold }
-span.synSpecial    { color: #6A5ACD }
-span.synUnderlined { color: #000000 ; text-decoration: underline }
-span.synError      { color: #FFFFFF ; background: #FF0000 none }
-span.synTodo       { color: #0000FF ; background: #FFFF00 none }
+span.syn-comment    { color: #0000FF }
+span.syn-constant   { color: #FF00FF }
+span.syn-identifier { color: #008B8B }
+span.syn-statement  { color: #A52A2A ; font-weight: bold }
+span.syn-preproc    { color: #A020F0 }
+span.syn-type       { color: #2E8B57 ; font-weight: bold }
+span.syn-special    { color: #6A5ACD }
+span.syn-underlined { color: #000000 ; text-decoration: underline }
+span.syn-error      { color: #FFFFFF ; background: #FF0000 none }
+span.syn-todo       { color: #0000FF ; background: #FFFF00 none }
 
 /* Articles */
 .entry-meta p {
@@ -201,11 +250,11 @@ span.synTodo       { color: #0000FF ; background: #FFFF00 none }
 }
 
 /* PictureArticle plugin */
-.daizu-main-thumbnail {
+.display-picture {
 	margin: 2ex 1ex;
 	text-align: center;
 }
-.daizu-main-thumbnail img {
+.display-picture img {
 	background-color: #FFF;
 	border: 1px solid #004780;
 	margin-bottom: 1ex;

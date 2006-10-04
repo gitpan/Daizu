@@ -6,7 +6,7 @@
          user - (optional) database username
          password - (optional) database password
    -->
- <database dsn="dbi:Pg:dbname=daizu_test" />
+ <database @TEST_DATABASE_CONFIG@ />
 
  <!-- How to connect to the Subversion repository.  Attributes:
          url - repository URL
@@ -42,6 +42,7 @@
 
  <plugin class="Daizu::Plugin::SyntaxHighlight" />
  <plugin class="Daizu::Plugin::HeaderAnchor" />
+ <plugin class="Daizu::Plugin::XHTMLArticle" />
  <plugin class="Daizu::Plugin::PodArticle" />
  <plugin class="Daizu::Plugin::PictureArticle">
   <thumbnail max-width="300" />

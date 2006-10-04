@@ -4,13 +4,15 @@ use strict;
 
 # Tests for checking out and updating working copies in the database.
 
-use Test::More tests => 59;
+use Test::More;
 use DBI;
 use Carp::Assert qw( assert );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Wc;
 use Daizu::Util qw( db_row_id );
+
+init_tests(59);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;

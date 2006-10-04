@@ -2,10 +2,13 @@
 use warnings;
 use strict;
 
-use Test::More skip_all => 'publishing jobs not implemented yet';
+use Test::More;
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Publish qw( create_publishing_job );
+
+init_tests(undef);
+plan skip_all => 'publishing jobs not implemented yet';
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 create_publishing_job($cms);

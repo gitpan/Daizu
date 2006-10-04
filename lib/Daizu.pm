@@ -19,11 +19,22 @@ use Daizu::Util qw(
     xml_attr xml_croak
     daizu_data_dir
 );
-use Daizu::HTML qw( parse_xhtml_content );
 
 =head1 NAME
 
 Daizu - class for accessing Daizu CMS from Perl
+
+=head1 INTRODUCTION
+
+Daizu CMS is an experimental content management system.  It uses content
+stored in a Subversion repository, and keeps track of it in a PostgreSQL
+database.  It is an attempt to solve some of the underlying problems of
+content management once and for all.  As such the development so far has
+focused on the 'back end' parts of the system, and it doesn't really have
+a user interface to speak of.  It's certainly not ready for less technical
+users yet.  More information is available on the Daizu website:
+
+L<http://www.daizucms.org/>
 
 =head1 DESCRIPTION
 
@@ -73,32 +84,25 @@ Value: C<_template|_hide>
 
 =cut
 
-our $VERSION = '0.1';
+our $VERSION = '0.2';
 
 our $DEFAULT_CONFIG_FILENAME = '/etc/daizu/config.xml';
 our $CONFIG_NS = 'http://www.daizucms.org/ns/config/';
 our $HTML_EXTENSION_NS = 'http://www.daizucms.org/ns/html-extension/';
 our $HIDING_FILENAMES = '_template|_hide';
 
-=item %Daizu::DEFAULT_ARTICLE_PARSERS
+=item %OVERRIDABLE_PROPERTY
 
-A mapping of mime types to code references (for methods in this class)
-which can read articles in these formats and turn them into an XHTML DOM
-which can then be used for further processing to publish the article.
-
-Handlers are only defined for XHTML articles (which are actually fragments
-of XHTML, the bit inside the C<body> element).
-
-These are only the default article parsers.  You can add more using
-plugins, which should register themselves by calling the
-L<add_article_parser()|/$cms-E<gt>add_article_parser($mime_type, $path, $object, $method)>
-method below.  See for example L<Daizu::Plugin::PodArticle>.
+A hash describing which pieces of metadata can be overridden by article
+loader plugins.  The keys are the names of Subversion properties, and
+the values are the names of columns in the C<wc_file> table.
 
 =cut
 
-our %DEFAULT_ARTICLE_PARSERS = (
-    'text/html' => \&parse_xhtml_article,
-    'application/xhtml+xml' => \&parse_xhtml_article,
+our %OVERRIDABLE_PROPERTY = (
+    'dc:title' => 'title',
+    'dc:description' => 'description',
+    'daizu:short-title' => 'short_title',
 );
 
 =back
@@ -157,6 +161,8 @@ sub new
         my $elem = _singleton_conf_elem($filename, $root, 'database');
         my $dsn = xml_attr($filename, $elem, 'dsn');
         my $user = $elem->getAttribute('user');
+        die "$filename: <database> should have 'user' attribute, not 'username'"
+            if !defined $user && $elem->hasAttribute('username');
         my $password = $elem->getAttribute('password');
         $self->{db} = DBI->connect($dsn, $user, $password, {
             AutoCommit => 1,
@@ -227,10 +233,7 @@ sub new
     # Initialize hooks for plugins.
     $self->{property_loaders}{'*'} = [ [ $self => '_std_property_loader' ] ];
     $self->{html_dom_filters} = {};
-    $self->{article_parsers} = {};
-    while (my ($mime_type, $method) = each %DEFAULT_ARTICLE_PARSERS) {
-        push @{$self->{article_parsers}{$mime_type}{''}}, [ $self => $method ];
-    }
+    $self->{article_loaders} = {};
 
     # Read global configuration for things which can be overridden for
     # specific paths.
@@ -420,10 +423,10 @@ sub add_property_loader
     push @{$self->{property_loaders}{$pattern}}, [ $object => $method ];
 }
 
-=item $cms-E<gt>add_article_parser($mime_type, $path, $object, $method)
+=item $cms-E<gt>add_article_loader($mime_type, $path, $object, $method)
 
 Plugins can use this to register a method which will be called whenever
-an article of type C<$mime_type> needs to be parsed.  The MIME type can be
+an article of type C<$mime_type> needs to be loaded.  The MIME type can be
 fully specified, or be something like C<image/*> (to match any image format),
 or just be C<*> to match any type.  These aren't generic glob or regex
 patterns, so only those three levels of specificity are allowed.  The
@@ -441,23 +444,69 @@ method through to this method as-is.
 C<$method> (a method name) will be called on C<$object>, and will be
 passed C<$cms> and a
 L<Daizu::File> object representing the input file.  The method should
-initialize the file object with the content (XHTML DOM) and metadata
-for the article and return true to indicate that it was able to load
-the file as an article.  Alternatively it can return false to indicate
-that it can't handle the file, in which case it shouldn't alter the file
-object at all.
+return a hash of values describing the article.  Alternatively it can
+return false to indicate that it can't handle the file.
+
+The hash returned can contain the following values:
+
+=over
+
+=item content
+
+Required.  All the other values are optional.
+
+This should be an XHTML DOM of the article's content, as it will be published.
+It should be an L<XML::LibXML::Document> object, with a root element called
+C<body> in the XHTML namespace.  It can contain extension elements to be
+processed by article filter plugins.  It can contain XInclude elements,
+which will be processed by the
+L<expand_xinclude() function|Daizu::Util/expand_xinclude($db, $doc, $wc_id, $path)>.
+Entity references should not be present.
+
+=item title
+
+The title to use for the article.  If this is present and not undef then
+it will override the value of the C<dc:title> property.
+
+=item short_title
+
+The 'short title' to use for the article.  If this is present and not
+undef then it will override the value of the C<daizu:short-title> property.
+
+=item description
+
+The description to use for the article.  If this is present and not undef then
+it will override the value of the C<dc:description> property.
+
+=item pages_url
+
+The URL to use for the first page of the article, and which will also be
+used to generate URLs for subsequent pages (if any).  This can be absolute,
+or relative to the file's base URL.
+
+=item extra_urls
+
+A reference to an array of URL info hashes describing extra URLs generated
+by the file in addition to the actual pages of the article.  These are
+stored in the C<wc_article_extra_url> table.
+
+=item extra_templates
+
+A reference to an array of filenames of extra templates to be included in
+the article's 'extras' column.  These are stored in the
+C<wc_article_extra_template> table.
+
+=back
 
 See L<Daizu::Plugin::PodArticle> or L<Daizu::Plugin::PictureArticle> for
-examples of registering and writing article parser plugins, and also the
-L<parse_xhtml_article()|/$cms-E<gt>parse_xhtml_article($cms, $file)>
-method in this class.
+examples of registering and writing article loader plugins.
 
 =cut
 
-sub add_article_parser
+sub add_article_loader
 {
     my ($self, $mime_type, $path, $object, $method) = @_;
-    push @{$self->{article_parsers}{$mime_type}{$path}}, [ $object => $method ];
+    push @{$self->{article_loaders}{$mime_type}{$path}}, [ $object => $method ];
 }
 
 =item $cms-E<gt>add_html_dom_filter($path, $object, $method)
@@ -527,27 +576,29 @@ sub _std_property_loader
         $update{modified_at} = db_datetime($time);
     }
 
-    $update{title} = trim_with_empty_null($props->{'dc:title'})
-        if exists $props->{'dc:title'};
-
-    $update{description} = trim_with_empty_null($props->{'dc:description'})
-        if exists $props->{'dc:description'};
-
-    if (exists $props->{'daizu:status'}) {
-        my $stat = $props->{'daizu:status'};
-        $update{retired} = (defined $stat && trim($stat) eq 'retired') ? 1 : 0;
+    while (my ($property, $column) = each %Daizu::OVERRIDABLE_PROPERTY) {
+        $update{$column} = trim_with_empty_null($props->{$property})
+            if exists $props->{$property};
     }
 
-    $update{generator} = trim($props->{'daizu:generator'})
-        if exists $props->{'daizu:generator'};
+    if (exists $props->{'daizu:flags'}) {
+        my @stat = split ' ', $props->{'daizu:flags'};
+        $update{retired} = $update{no_index} = 0;
+        for (@stat) {
+            if ($_ eq 'retired') {
+                $update{retired} = 1;
+            }
+            elsif ($_ eq 'no-index') {
+                $update{no_index} = 1;
+            }
+            else {
+                warn "file contains unrecognized value '$_' in 'daizu:flags'";
+            }
+        }
+    }
 
-    $update{base_url} = validate_uri($props->{'daizu:url'})
+    $update{custom_url} = validate_uri($props->{'daizu:url'})
         if exists $props->{'daizu:url'};
-
-    if (exists $props->{'daizu:type'}) {
-        my $type = $props->{'daizu:type'};
-        $update{article} = (defined $type && trim($type) eq 'article') ? 1 : 0;
-    }
 
     db_update $db, wc_file => $id, %update;
 
@@ -571,31 +622,6 @@ sub _std_property_loader
             }
         }
     }
-}
-
-=item $cms-E<gt>parse_xhtml_article($cms, $file)
-
-An article parser which parses fragments of XHTML content and turns them
-into an XHTML DOM.  This can also be used for parsing any file whose
-content is in a suitable format.  It is a thin wrapper around the
-L<parse_xhtml_content()|Daizu::HTML/parse_xhtml_content($cms, $wc_id, $path, $data)>
-function.
-
-The redundant C<$cms> argument is there because this function needs to
-match the calling convention for article parsers, as described in the
-documentation for the
-L<add_article_parser()|/$cms-E<gt>add_article_parser($mime_type, $path, $object, $method)>
-method.
-
-=cut
-
-sub parse_xhtml_article
-{
-    my ($self, undef, $file) = @_;
-    my $data = $file->data;
-    my $dom = parse_xhtml_content($self, $file->{wc_id}, $file->{path}, $data);
-    $file->article_doc($dom);
-    return 1;
 }
 
 =item $cms-E<gt>call_property_loaders($id, $props)

@@ -69,6 +69,8 @@ my %COMMANDS = (
     #replace => \&cmd_replace,
     'update-urls' => \&cmd_update_urls,
     'update-all-urls' => \&cmd_update_all_urls,
+    'update-article' => \&cmd_update_article,
+    'update-all-articles' => \&cmd_update_all_articles,
     'url-content' => \&cmd_url_content,
     'publish-all' => \&cmd_publish_all,
 );
@@ -228,6 +230,7 @@ sub cmd_update_urls
 
     my $wc = Daizu::Wc->new($cms, $wc_id);
     my $file = $wc->file_at_path($path);
+    # TODO - this should trigger generation of redirect or gone maps
     $file->update_urls_in_db;
 }
 
@@ -316,6 +319,54 @@ sub cmd_update_all_urls
     }
 }
 
+=item update-article path [wc-id]
+
+Reload the article at the specified path, using the appropriate article
+loader plugin, and cache the resulting content and metadata.  This should
+normally be done automatically when a working copy is updated.
+
+The extra argument specifies the ID number of the working copy in which
+to look for the path, and defaults to the live working copy.
+
+=cut
+
+sub cmd_update_article
+{
+    my ($cms, $opt, $path, $wc_id) = @_;
+
+    my $wc = Daizu::Wc->new($cms, $wc_id);
+    my $file = $wc->file_at_path($path);
+    die "Can't update '$path', not an article\n" unless $file->{article};
+
+    $file->update_loaded_article_in_db;
+}
+
+=item update-all-articles [wc-id]
+
+Same as C<update-article> above, but reloads all article files which
+currently exist in the working copy.
+
+=cut
+
+sub cmd_update_all_articles
+{
+    my ($cms, $opt, $wc_id) = @_;
+    my $wc = Daizu::Wc->new($cms, $wc_id);
+
+    my $sth = $cms->db->prepare(q{
+        select id
+        from wc_file
+        where wc_id = ?
+          and article
+        order by path
+    });
+    $sth->execute($wc_id);
+
+    while (my ($file_id) = $sth->fetchrow_array) {
+        Daizu::File->new($cms, $file_id)->update_loaded_article_in_db;
+    }
+}
+
 =item url-content url [wc-id]
 
 Generate the content for the specified URL, and print it to the standard
@@ -376,15 +427,19 @@ sub publish_guid_urls
     my ($cms, $wc_id, $guid_id, $gen_class, $method, $urls) = @_;
     my $db = $cms->db;
 
-    my ($file_id) = db_row_id($db, 'wc_file',
-        wc_id => $wc_id, guid_id => $guid_id,
+    my ($file_id, $root_file_id) = db_select($db, 'wc_file',
+        { wc_id => $wc_id, guid_id => $guid_id },
+        qw( id root_file_id ),
     );
     die "$0: URLs of GUID $guid_id marked active, but file no longer exists\n"
         unless defined $file_id;
     my $file = Daizu::File->new($cms, $file_id);
 
-    # TODO - wrong root file, although it's not clear what the right one is.
-    my $generator = instantiate_generator($cms, $gen_class, $file);
+    my $root_file = $file;
+    $root_file = Daizu::File->new($cms, $root_file_id)
+        if defined $root_file_id;
+
+    my $generator = instantiate_generator($cms, $gen_class, $root_file);
     die "$0: generator '$gen_class' is missing method '$method'\n"
         unless $generator->can($method);
 
@@ -398,14 +453,24 @@ sub publish_guid_urls
         # TODO - open in staging area and move into place after all publication
         # TODO - set mtime to modified_at
         mkpath(file($docroot, $path)->stringify);
-        open my $fh, '>', file($docroot, $path, $filename)
-            or die "error opening output file '$docroot/$path/$filename': $!";
+        my $full_filename = file($docroot, $path, $filename);
+        open my $fh, '>', $full_filename
+            or die "Error opening output file '$full_filename': $!\n";
         binmode $fh
-            or die "error setting binmode on output file: $!";
+            or die "Error setting binmode on output file '$full_filename': $!\n";
         $url_info->{fh} = $fh;
+        $url_info->{_full_filename} = $full_filename;
     }
 
     $generator->$method($file, $urls);
+
+    # Close the output files explicitly, so that any errors encountered while
+    # flushing buffers are correctly reported.
+    for my $url_info (@$urls) {
+        next unless defined $url_info->{fh};
+        close $url_info->{fh}
+            or die "Error closing output file '$url_info->{_full_filename}': $!\n";
+    }
 }
 
 =item publish-all base-url [wc-id]

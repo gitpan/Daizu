@@ -13,7 +13,6 @@ our @EXPORT_OK = qw(
 use utf8;
 use HTML::Parser ();
 use URI;
-use Encode qw( encode decode );
 use Daizu::HTML qw(
     html_escape_attr
 );
@@ -192,18 +191,19 @@ sub output_preview
         my $content = '';
         open my $fh, '>', \$content or die $!;
         binmode $fh or die "binmode error: $!";
-        $generator->$method($file, [ {
+        my $url_info = {
             generator => ref($generator),
             url => $url,
             method => $method,
             argument => $argument,
             type => $type,
             fh => $fh,
-        } ]);
-        close $fh or die $!;
+        };
+        $generator->$method($file, [ $url_info ]);
+        if (defined $url_info->{fh}) {
+            close $fh or die $!;
+        }
 
-        $content = decode('UTF-8', $content, Encode::FB_CROAK)
-            if $type =~ m!^text/!;
         $preview_function->($cms, $file->{wc_id}, $url, $content, $outfh);
     }
     else {
@@ -263,7 +263,7 @@ sub adjust_preview_links_html
                                              $css, $fh);
                 }
                 else {
-                    print $fh encode('UTF-8', $css, Encode::FB_CROAK);
+                    print $fh $css;
                 }
             },
             'text',
@@ -286,7 +286,7 @@ sub _start_h
         "$_=\"" . html_escape_attr(exists $HTML_URL_ATTR{"$tagname:$_"}
             ? adjust_link_for_preview($cms, $wc_id, $base_url, $attr->{$_},
                                        $HTML_URL_ATTR{"$tagname:$_"})
-            : encode('UTF-8', $attr->{$_}, Encode::FB_CROAK)) . '"';
+            : $attr->{$_}) . '"';
     } sort keys %$attr;
 
     print $fh ($attrtext ? "<$tagname $attrtext>" : "<$tagname>");
@@ -331,7 +331,7 @@ CSS syntax.
 
         LOOP: {
             if ($css =~ m{\G($COMMENT|$STRING|[^uU\@'"/]+)}cogs) {
-                print $fh encode('UTF-8', "$1", Encode::FB_CROAK);
+                print $fh $1;
                 redo LOOP;
             }
             elsif ($css =~ /\G$URI/cogs) {
@@ -350,7 +350,7 @@ CSS syntax.
                 redo LOOP;
             }
             elsif ($css =~ /\G(.)/cogs) {
-                print $fh encode('UTF-8', "$1", Encode::FB_CROAK);
+                print $fh $1;
                 redo LOOP;
             }
         }

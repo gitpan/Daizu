@@ -4,10 +4,10 @@ use strict;
 
 use base 'Exporter';
 our @EXPORT_OK = qw(
-    $TEST_DB_NAME $DB_SCHEMA_FILENAME
+    $TEST_DBCONF_FILENAME $DB_SCHEMA_FILENAME
     $TEST_REPOS_DIR $TEST_REPOS_URL
+    init_tests test_config
     create_database drop_database
-    editor_set_file_content
     create_test_repos
 );
 
@@ -21,6 +21,7 @@ use SVN::Repos;
 use SVN::Delta;
 use Carp qw( croak );
 use Carp::Assert qw( assert DEBUG );
+use Test::More;
 
 =head1 NAME
 
@@ -36,11 +37,13 @@ creates a test database and repository.
 
 =over
 
-=item $TEST_DB_NAME
+=item $TEST_DBCONF_FILENAME
 
-Name of database to use for testing.
+Name of configuration file which provides information about how to connect
+to the databases used for the test suite.  The C<test_config> function
+parses this.
 
-Value: daizu_test
+Value: I<test.conf>
 
 =item $DB_SCHEMA_FILENAME
 
@@ -85,7 +88,7 @@ by I<t/00setup.t>)
 
 =cut
 
-our $TEST_DB_NAME = 'daizu_test';
+our $TEST_DBCONF_FILENAME = file('test.conf')->absolute->stringify;
 our $DB_SCHEMA_FILENAME = 'db.sql';
 our $TEST_REPOS_DIR = dir('.test-repos')->absolute->stringify;
 our $TEST_REPOS_URL = "file://$TEST_REPOS_DIR";
@@ -100,6 +103,84 @@ None of them are exported by default.
 
 =over
 
+=item init_tests($num_tests, [$show_errors])
+
+Load the test configuration file (which will allow you to use
+the L<test_config()|/test_config()> function later), and check it to make sure
+the tests are properly configured.  If they are then initialize L<Test::More>
+with the number of tests expected (unless C<$num_tests> is undef).
+Otherwise tell Test::More to skip all the tests.
+
+If C<$show_errors> is present and true, display warnings about any problems
+with the test configuration file.  This should be done in the first test
+program so that the user knows why the tests aren't being run.  The others
+can just skip the tests.
+
+=item test_config()
+
+Return a reference to a hash of configuration values from the
+file specified by L<$TEST_DBCONF_FILENAME|/$TEST_DBCONF_FILENAME>.
+This will fail if L<init_tests()|/init_tests($num_tests, [$show_errors])>
+hasn't been run yet.
+
+=cut
+
+{
+    my $test_config;
+
+    sub init_tests
+    {
+        my ($num_tests, $show_errors) = @_;
+        my $errors = '';
+
+        open my $fh, '<', $TEST_DBCONF_FILENAME
+            or die "$0: error opening 'TEST_DBCONF_FILENAME': $!\n";
+
+        my %config;
+        while (<$fh>) {
+            next unless /\S/;
+            next if /^\s*#/;
+            chomp;
+            my ($key, $value) = split ' ', $_, 2;
+            $errors .= "$TEST_DBCONF_FILENAME:$.: duplicate value for '$key'\n"
+                if exists $config{$key};
+            $errors .= "$TEST_DBCONF_FILENAME:$.: value missing for '$key'\n"
+                if !defined $value || $value eq '';
+            $config{$key} = $value;
+        }
+
+        $errors .= "$0: you need to edit the file '$TEST_DBCONF_FILENAME'" .
+                   " before you can run the test suite, to configure how the" .
+                   " tests should access your PostgreSQL server.\n"
+            if $config{'not-configured'};
+
+        for (qw( template-dsn test-dsn )) {
+            $errors .= "$0: configuration file '$TEST_DBCONF_FILENAME' must" .
+                       " contain a value called '$_' for the test suite to" .
+                       " work.\n"
+                 unless $config{$_};
+        }
+
+        if ($errors ne '') {
+            warn "\n\n$errors\n" if $show_errors;
+            plan skip_all => "Tests not configured in '$TEST_DBCONF_FILENAME'";
+        }
+        else {
+            plan tests => $num_tests
+                if defined $num_tests;
+        }
+
+        $test_config = \%config;
+    }
+
+    sub test_config
+    {
+        croak "can't call 'test_config' until you've called 'init_tests'"
+            unless defined $test_config;
+        return $test_config;
+    }
+}
+
 =item pg_template_dbh()
 
 Returns a L<DBI> database handle connected to the PostgreSQL C<template1>
@@ -109,8 +190,12 @@ database, which can be used for example to create the test database.
 
 sub pg_template_dbh
 {
-    return DBI->connect('dbi:Pg:dbname=template1', undef, undef,
-                        { AutoCommit => 1, RaiseError => 1, PrintError => 0 });
+    my $config = test_config();
+    return DBI->connect(
+        $config->{'template-dsn'}, $config->{'template-user'},
+        $config->{'template-password'},
+        { AutoCommit => 1, RaiseError => 1, PrintError => 0 },
+    );
 }
 
 =item create_database()
@@ -123,21 +208,29 @@ a L<DBI> handle for accessing it.
 sub create_database
 {
     # Drop the test DB if it already exists.
-    my $db = DBI->connect("dbi:Pg:dbname=$TEST_DB_NAME", undef, undef,
-                          { RaiseError => 0, PrintError => 0 });
+    my $config = test_config();
+    my $db = DBI->connect(
+        $config->{'test-dsn'}, $config->{'test-user'},
+        $config->{'test-password'},
+        { RaiseError => 0, PrintError => 0 },
+    );
     if (defined $db) {
         undef $db;
         drop_database();
     }
 
     $db = pg_template_dbh();
+    my $db_name = _test_db_name();
     $db->do(qq{
-        create database $TEST_DB_NAME
+        create database $db_name
     });
 
     $db->disconnect;
-    $db = DBI->connect("dbi:Pg:dbname=$TEST_DB_NAME", undef, undef,
-                        { AutoCommit => 1, RaiseError => 1, PrintError => 0 });
+    $db = DBI->connect(
+        $config->{'test-dsn'}, $config->{'test-user'},
+        $config->{'test-password'},
+        { AutoCommit => 1, RaiseError => 1, PrintError => 0 },
+    );
 
     # Turn off warnings while loading the schema.  This silences the 'NOTICE'
     # messages about which indexes PostgreSQL is creating, which aren't
@@ -176,27 +269,11 @@ sub drop_database
 {
     my $db = pg_template_dbh();
     sleep 1;    # Wait until we're properly disconnected.
+
+    my $db_name = _test_db_name();
     $db->do(qq{
-        drop database $TEST_DB_NAME
+        drop database $db_name
     });
-}
-
-=item editor_set_file_content($ed, $file_baton, $content)
-
-Send some data from C<$content> (which should be a reference to a string)
-into the Subversion delta editor C<$ed>.  C<$file_baton> should be the
-baton returned from the editor when you called its C<add_file> or
-C<open_file> method.
-
-=cut
-
-sub editor_set_file_content
-{
-    my ($ed, $file_baton, $content) = @_;
-    my $handle = $ed->apply_textdelta($file_baton, undef);
-    die "bad textdelta handle" unless $handle && $#$handle > 0;
-    my $fh = IO::Scalar->new(\$content);
-    SVN::TxDelta::send_stream($fh, @$handle);
 }
 
 =item create_test_repos()
@@ -217,6 +294,18 @@ sub create_test_repos
 }
 
 =back
+
+=cut
+
+sub _test_db_name
+{
+    my $config = test_config();
+    my $test_dsn = $config->{'test-dsn'};
+    die "$0: can't extract 'dbname' part from test DSN '$test_dsn' in order" .
+        " to drop the test database\n"
+        unless $test_dsn =~ /\bdbname=(\w+)\b/i;
+    return "$1";
+}
 
 =head1 COPYRIGHT
 

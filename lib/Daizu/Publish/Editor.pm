@@ -12,9 +12,22 @@ use Daizu::Util qw(
     db_row_exists db_insert db_update
 );
 
-=head1 Daizu::Publish::Editor - Subversion editor for creating publishing jobs
+=head1 NAME
 
-=head2 BATONS
+Daizu::Publish::Editor - Subversion editor for creating publishing jobs
+
+=head1 DESCRIPTION
+
+This class provides a Subversion editor which collects information about
+which files have changed, and what kind of changes were made to them
+(changed content, new properties, etc.).  This information can then be
+used to create a 'publishing job' which dictates what work needs to be
+done to bring the websites up to date.
+
+TODO - note that this isn't currently used, since the publishing jobs
+system is still under development.
+
+=head1 BATONS
 
 Directory and file batons are a reference to a hash which can contain the
 following keys:

@@ -94,9 +94,10 @@ sub filter_article
 
         my @words = ('sec', map { lc } split ' ', $elem->textContent);
         for (@words) {
-            s/[^a-zA-Z0-9]+/-/;
-            s/^-+//;
-            s/-+$//;
+            s/\.+/./g;
+            s/[^.a-zA-Z0-9]+/-/g;
+            s/^[-.]+//;
+            s/[-.]+$//;
         }
         @words = map { $_ eq '' ? () : ($_) } @words;
 

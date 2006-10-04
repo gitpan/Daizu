@@ -10,8 +10,9 @@ use Image::Size qw( imgsize );
 use Carp qw( croak );
 use Carp::Assert qw( assert DEBUG );
 use Daizu::Revision qw( file_guid );
+use Daizu::File;
 use Daizu::Util qw(
-    trim validate_date db_datetime parse_db_datetime
+    trim trim_with_empty_null validate_date db_datetime
     db_row_exists db_select db_insert db_update db_replace db_delete
     wc_file_data wc_set_file_data
     guid_first_last_times
@@ -135,12 +136,24 @@ sub add_directory
         return undef;
     }
     else {
-        my $parent_id = defined $baton ? $baton->{id} : undef;
         assert($branch_path eq substr($path, 0, length($branch_path))) if DEBUG;
         $path = substr($path, length($branch_path) + 1);
         my $guid = file_guid($db, $self->{branch_id}, $path, $self->{revnum});
         my $name = ($path =~ m!/([^/]+)\z!) ? $1 : $path;
         my ($issued, $modified) = guid_first_last_times($db, $guid->{id});
+
+        my $parent_id = defined $baton ? $baton->{id} : undef;
+        my ($generator, $root_file_id);
+        if (defined $parent_id) {
+            ($generator, $root_file_id) = db_select($db, wc_file => $parent_id,
+                                                   'generator', 'root_file_id');
+            $root_file_id = $parent_id
+                unless defined $root_file_id;
+        }
+        else {
+            $generator = 'Daizu::Gen';
+        }
+
         my $file_id = db_insert($db, 'wc_file',
             wc_id => $self->{wc_id},
             guid_id => $guid->{id},
@@ -152,6 +165,8 @@ sub add_directory
             modified_at => db_datetime($modified),
             cur_revnum => $self->{revnum},
             data_len => 0,
+            generator => $generator,
+            root_file_id => $root_file_id,
         );
         return { id => $file_id, path => $path, added => 1 };
     }
@@ -201,6 +216,7 @@ sub change_dir_prop
     # the file or directory is closed.
     $baton->{props}{$name} = $value;
 
+    # Store in the working copy.
     if (!defined $value) {
         db_delete($db, 'wc_property',
             file_id => $file_id,
@@ -212,6 +228,45 @@ sub change_dir_prop
             { file_id => $file_id, name => $name },
             value => $value,
         );
+    }
+
+    # Handle changes to the 'daizu:generator' property specially, because it
+    # might mean updating our children if they don't override it.
+    if ($name eq 'daizu:generator') {
+        if (defined $value) {
+            my $generator = trim($value);
+            die "bad 'daizu:generator' property, seems to be empty"
+                if $generator eq '';
+
+            # This will set all the children recursively, and also set the
+            # generator and root file for this file.
+            _update_generators($db, $file_id, $generator, $file_id);
+
+            # But this is the root file, so unset the root file ID.
+            db_update($db, wc_file => $file_id, root_file_id => undef);
+        }
+        else {
+            # Property removed.  Make the file inherit its generator from
+            # its parent.
+            my ($generator, $root_file_id);
+            my $parent_id = db_select($db, wc_file => $file_id, 'parent_id');
+            if (defined $parent_id) {
+                ($generator, $root_file_id) = db_select($db,
+                    wc_file => $parent_id,
+                    qw( generator root_file_id ),
+                );
+                $root_file_id = $parent_id
+                    unless defined $root_file_id;
+            }
+            else {
+                # We're a top-level file, so fall back to the default.
+                $generator = 'Daizu::Gen';
+                $root_file_id = $file_id;
+            }
+
+            assert(defined $root_file_id) if DEBUG;
+            _update_generators($db, $file_id, $generator, $root_file_id);
+        }
     }
 
     $baton->{changed} = 1;
@@ -248,7 +303,6 @@ sub add_file
     my ($self, $path, $baton) = @_;
     my $db = $self->{db};
     my $branch_path = $self->{branch_path};
-    my $parent_id = defined $baton ? $baton->{id} : undef;
 
     assert($branch_path eq substr($path, 0, length($branch_path))) if DEBUG;
     $path = substr($path, length($branch_path) + 1);
@@ -256,6 +310,19 @@ sub add_file
     my $guid = file_guid($db, $self->{branch_id}, $path, $self->{revnum});
     my $name = ($path =~ m!/([^/]+)\z!) ? $1 : $path;
     my ($issued, $modified) = guid_first_last_times($db, $guid->{id});
+
+    my $parent_id = defined $baton ? $baton->{id} : undef;
+    my ($generator, $root_file_id);
+    if (defined $parent_id) {
+        ($generator, $root_file_id) = db_select($db, wc_file => $parent_id,
+                                                'generator', 'root_file_id');
+        $root_file_id = $parent_id
+            unless defined $root_file_id;
+    }
+    else {
+        $generator = 'Daizu::Gen';
+    }
+
     my $file_id = db_insert($db, 'wc_file',
         wc_id => $self->{wc_id},
         guid_id => $guid->{id},
@@ -268,7 +335,9 @@ sub add_file
         cur_revnum => $self->{revnum},
         data => '',
         data_len => 0,
-        data_sha1 => '2jmj7l5rSw0yVb/vlWAYkK/YBwk',
+        data_sha1 => '2jmj7l5rSw0yVb/vlWAYkK/YBwk',     # SHA1 of empty string
+        generator => $generator,
+        root_file_id => $root_file_id,
     );
     return { id => $file_id, path => $path, added => 1 };
 }
@@ -282,6 +351,19 @@ sub apply_textdelta
     my $path = $baton->{path};
 
     $baton->{changed} = 1;
+    $self->{articles_to_reload}{$file_id} = undef;
+
+    # If this file is included (via XInclude) in the content of any articles,
+    # then those articles will have to be reloaded to get these changes.
+    my $sth = $self->{db}->prepare(q{
+        select file_id
+        from wc_article_included_files
+        where included_file_id = ?
+    });
+    $sth->execute($file_id);
+    while (my ($id) = $sth->fetchrow_array) {
+        $self->{articles_to_reload}{$id} = undef;
+    }
 
     $baton->{data} = '';
     open my $out_fh, '>', \$baton->{data}
@@ -345,6 +427,58 @@ sub close_file
         $self->{file_authors_needs_init}{$baton->{path}} = $file_id
             if $baton->{added};
     }
+
+    my $reload_article;
+
+    for (keys %Daizu::OVERRIDABLE_PROPERTY) {
+        $reload_article = 1
+            if exists $props->{$_};
+    }
+
+    if (exists $props->{'daizu:type'}) {
+        my $was_article = db_select($db, wc_file => $file_id, 'article');
+        my $type = $props->{'daizu:type'};
+        my $will_be_article = defined $type && trim($type) eq 'article';
+
+        if ($will_be_article && !$was_article) {
+            # Turn non-article into article.
+            $reload_article = 1;
+            db_update($db, wc_file => $file_id,
+                article => 1,
+                # These have to be given a non-NULL value, because of the
+                # wc_file_article_loaded_chk constraint.  These values should
+                # be gone by the time this transaction is committed.  This hack
+                # is necessary because PostgreSQL, as of version 8.1, doesn't
+                # support deferrable constraints other than for foreign keys.
+                article_pages_url => 'AWAITING LOADING',
+                article_content => 'AWAITING LOADING',
+            );
+        }
+        elsif ($was_article && !$will_be_article) {
+            # Turn article into non-article.
+            $reload_article = 0;
+            my %meta;
+            while (my ($propname, $col) = each %Daizu::OVERRIDABLE_PROPERTY) {
+                my $value = db_select($db, 'wc_property',
+                    { file_id => $file_id, name => $propname },
+                    'value',
+                );
+                $meta{$col} = trim_with_empty_null($value);
+            }
+            db_update($db, wc_file => $file_id,
+                article => 0,
+                article_pages_url => undef,
+                article_content => undef,
+                %meta,
+            );
+            db_delete($db, 'wc_article_extra_url', file_id => $file_id);
+            db_delete($db, 'wc_article_extra_template', file_id => $file_id);
+            db_delete($db, 'wc_article_included_files', file_id => $file_id);
+        }
+    }
+
+    $self->{articles_to_reload}{$file_id} = undef
+        if $reload_article;
 }
 
 sub abort_edit
@@ -361,6 +495,10 @@ sub close_edit
 
     while (my ($path, $id) = each %{$self->{file_authors_needs_init}}) {
         _update_file_authors_for_new_file($self->{cms}, $db, $id);
+    }
+
+    for my $id (keys %{$self->{articles_to_reload}}) {
+        Daizu::File->new($self->{cms}, $id)->update_loaded_article_in_db;
     }
 }
 
@@ -524,6 +662,33 @@ sub _update_file_authors_for_new_file
                 unless defined $user_id;
             $add_sth->execute($file_id, $user_id, $n++);
         }
+    }
+}
+
+sub _update_generators
+{
+    my ($db, $file_id, $generator, $root_file_id) = @_;
+
+    db_update($db, wc_file => $file_id,
+        generator => $generator,
+        root_file_id => $root_file_id,
+    );
+
+    # If it's a directory, we have to also update its children, unless they
+    # have their own generator override.
+    my $is_dir = db_select($db, wc_file => $file_id, 'is_dir');
+    return unless $is_dir;
+
+    my $children = $db->selectcol_arrayref(q{
+        select id
+        from wc_file
+        where parent_id = ?
+          and root_file_id is not null
+    }, undef, $file_id);
+    assert(defined $children) if DEBUG;
+
+    for my $id (@$children) {
+        _update_generators($db, $id, $generator, $root_file_id);
     }
 }
 

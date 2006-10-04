@@ -8,7 +8,7 @@ use Daizu::Wc::UpdateEditor;
 use Daizu::File;
 use Daizu::Util qw(
     db_datetime
-    db_row_exists db_row_id db_select db_insert db_update
+    db_row_exists db_row_id db_select db_insert db_update transactionally
     mint_guid guess_mime_type wc_set_file_data
     branch_id
 );
@@ -73,6 +73,13 @@ Returns a C<Daizu::Wc> object for accessing it.
 sub checkout
 {
     my ($class, $cms, $branch, $revnum) = @_;
+    return transactionally($cms->{db}, \&_checkout_txn,
+                           $class, $cms, $branch, $revnum);
+}
+
+sub _checkout_txn
+{
+    my ($class, $cms, $branch, $revnum) = @_;
     my $db = $cms->{db};
 
     my $branch_id = branch_id($db, $branch);
@@ -86,8 +93,6 @@ sub checkout
         current_revision => $revnum,
     );
 
-    $db->begin_work;
-
     my $editor = Daizu::Wc::UpdateEditor->new(
         cms => $cms,
         db => $db,
@@ -99,8 +104,6 @@ sub checkout
     my $reporter = $cms->{ra}->do_update($revnum, $branch_path, 1, $editor);
     $reporter->set_path('', 0, 1, undef);
     $reporter->finish_report;
-
-    $db->commit;
 
     return $class->new($cms, $wc_id);
 }
@@ -159,19 +162,21 @@ recent revision available.
 sub update
 {
     my ($self, $revnum) = @_;
+    return transactionally($self->{cms}{db}, \&_update_txn, $self, $revnum);
+}
+
+sub _update_txn
+{
+    my ($self, $revnum) = @_;
     my $cms = $self->{cms};
     my $db = $cms->{db};
 
     my $latest_revnum = $cms->load_revision($revnum);
     $revnum = $latest_revnum unless defined $revnum;
 
-    $db->begin_work;
-
     my $cur_revnum = $self->current_revision;
-    if ($cur_revnum >= $revnum) {
-        $db->rollback;
-        return $cur_revnum;
-    }
+    return $cur_revnum
+        if $cur_revnum >= $revnum;
 
     my $editor = Daizu::Wc::UpdateEditor->new(
         cms => $self->{cms},
@@ -198,7 +203,6 @@ sub update
           and not deleted
     }, undef, $revnum);
 
-    $db->commit;
     return $revnum;
 }
 

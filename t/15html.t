@@ -2,18 +2,20 @@
 use warnings;
 use strict;
 
-use Test::More tests => 26;
+use Test::More;
 use Path::Class qw( file );
 use XML::LibXML;
 use Encode qw( decode );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::HTML qw(
-    parse_xhtml_content
     dom_body_to_html4 dom_node_to_html4 dom_body_to_text
+    dom_filtered_for_feeds
     absolutify_links
     html_escape_text html_escape_attr
 );
+
+init_tests(16);
 
 # html_escape_text
 is(html_escape_text(q{ < > & ' " }), q{ &lt; &gt; &amp; ' " },
@@ -60,49 +62,6 @@ is(html_escape_attr(q{ < > & ' " }), q{ &lt; &gt; &amp; ' &quot; },
        'dom_node_to_html4: complex markup and empty elements');
 }
 
-# parse_xhtml_content
-{
-    no warnings 'redefine';
-    my @opens;
-    local *Daizu::HTML::_open_uri = sub { push @opens, \@_; return \'mock-fh' };
-    my $done_read = 0;
-    local *Daizu::HTML::_read_uri = sub { $done_read++ ? '' : "read:${$_[0]}"; };
-    local *Daizu::HTML::_close_uri = sub { };
-
-    my $doc = parse_xhtml_content('$cms', '$wc_id', 'test/file', \q{
-        <p>Paragraph.</p>
-        <daizu:fold/>
-        <blockquote><xi:include href="inc.txt" parse="text"/></blockquote>
-    });
-
-    is(scalar(@opens), 1, 'parse_xhtml_content: opens one included file');
-    is($opens[0][0], '$cms',
-       'parse_xhtml_content: _open_uri passed right cms');
-    is($opens[0][1], '$wc_id',
-       'parse_xhtml_content: _open_uri passed right wc_id');
-    is($opens[0][2], 'daizu:///test/inc.txt',
-       'parse_xhtml_content: _open_uri passed right URL');
-
-    my $root = $doc->documentElement;
-    is($root->nodeName, 'body', 'parse_xhtml_content: right root elem');
-
-    my (@child_elems) = map {
-        $_->nodeType == XML_ELEMENT_NODE ? ($_) : ()
-    } $root->getChildNodes();
-    is(scalar(@child_elems), 3,
-       'parse_xhtml_content: right number of child elems');
-    is($child_elems[0]->localname, 'p', 'parse_xhtml_content: elem 0 is p');
-    is($child_elems[0]->namespaceURI, 'http://www.w3.org/1999/xhtml',
-       'parse_xhtml_content: elem 0 is XHTML');
-    is($child_elems[1]->localname, 'fold',
-       'parse_xhtml_content: elem 1 is fold');
-    is($child_elems[1]->namespaceURI,
-       'http://www.daizucms.org/ns/html-extension/',
-       'parse_xhtml_content: elem 0 is Daizu extension');
-    is($child_elems[2]->textContent, 'read:mock-fh',
-       'parse_xhtml_content: XInclude daizu: URI expanded correctly');
-}
-
 # dom_body_to_html4
 {
     my $doc = XML::LibXML::Document->new('1.0', 'UTF-8');
@@ -139,25 +98,37 @@ is(html_escape_attr(q{ < > & ' " }), q{ &lt; &gt; &amp; ' &quot; },
 
 # dom_body_to_text
 {
-    my $input = read_file('text-input.html');
+    my $input_doc = read_xml('text-input.html');
     my $expected = read_file('text-expected.txt');
     $expected = decode('UTF-8', $expected, Encode::FB_CROAK);
 
-    my $doc = parse_xhtml_content(undef, undef, 'test', \$input);
+    is(dom_body_to_text($input_doc), $expected, 'dom_body_to_text');
+}
 
-    is(dom_body_to_text($doc), $expected, 'dom_body_to_text');
+# dom_filtered_for_feeds
+{
+    my $input_doc = read_xml('feed-filter-input.html');
+    my $expected = read_file('feed-filter-expected.html');
+
+    my $got_doc = dom_filtered_for_feeds($input_doc);
+
+    my $output = '';
+    for ($got_doc->documentElement->childNodes) {
+        $output .= $_->toString;
+    }
+
+    is($output, $expected, 'dom_filtered_for_feeds');
 }
 
 # absolutify_links
 {
-    my $input = read_file('absolutify-input.html');
+    my $input_doc = read_xml('absolutify-input.html');
     my $expected = read_file('absolutify-expected.html');
 
-    my $doc = parse_xhtml_content(undef, undef, 'test/path/filename', \$input);
-    absolutify_links($doc, 'http://example.com/base/basefile.html');
+    absolutify_links($input_doc, 'http://example.com/base/basefile.html');
 
     my $output = '';
-    for ($doc->documentElement->childNodes) {
+    for ($input_doc->documentElement->childNodes) {
         $output .= $_->toString;
     }
     is($output, $expected, 'absolutify_links');
@@ -176,6 +147,12 @@ sub read_file
         or die "error reading file '$test_file' in binary mode: $!";
     local $/;
     return <$fh>;
+}
+
+sub read_xml
+{
+    my $input = read_file(@_);
+    return XML::LibXML->new->parse_string($input);
 }
 
 # vi:ts=4 sw=4 expandtab filetype=perl

@@ -9,12 +9,12 @@ our @EXPORT_OK = qw(
     validate_date w3c_datetime db_datetime rfc2822_datetime parse_db_datetime
     display_byte_size
     db_row_exists db_row_id db_select db_select_col
-    db_insert db_update db_replace db_delete
+    db_insert db_update db_replace db_delete transactionally
     wc_file_data guess_mime_type wc_set_file_data mint_guid
     guid_first_last_times
     load_class instantiate_generator
     update_all_file_urls
-    add_xml_elem xml_attr xml_croak
+    add_xml_elem xml_attr xml_croak expand_xinclude
     branch_id daizu_data_dir
 );
 
@@ -28,6 +28,7 @@ use Path::Class qw( file );
 use Digest::SHA1 qw( sha1_base64 );
 use Image::Size qw( imgsize );
 use Math::Round qw( nearest );
+use XML::LibXML;
 use Encode qw( encode decode );
 use Carp qw( croak );
 use Carp::Assert qw( assert DEBUG );
@@ -511,24 +512,18 @@ The column name is not quoted, so it can be an SQL expression.
 sub db_select_col
 {
     my ($db, $table, $where, $column) = @_;
-    croak 'usage: db_select_all($db, $table, $where, $column)'
+    croak 'usage: db_select_col($db, $table, $where, $column)'
         unless @_ == 4 && defined $column;
 
     $where = _where($db, (ref $where ? (%$where) : ($where)));
 
-    my $sth = $db->prepare(qq{
+    my $records = $db->selectcol_arrayref(qq{
         select $column
         from $table
         $where
     });
-    $sth->execute;
 
-    my @records;
-    while (my ($val) = $sth->fetchrow_array) {
-        push @records, $val;
-    }
-
-    return @records;
+    return @$records;
 }
 
 =item db_insert($db, $table, %value)
@@ -676,6 +671,70 @@ sub db_delete
     return $db->do("delete from $table $where");
 }
 
+=item transactionally($db, $code, @args)
+
+Executes C<code> (a reference to a sub) within a database transaction on
+C<$db>.  The optional C<@args> will be passed to the function.  Its return
+value will be returned from C<transactionally>.
+
+If the code being executed dies, then the transaction is rolled back and
+the exception passed on.  Otherwise, the transaction is committed.
+
+A database transaction is not started or finished when this function is
+called recursively.  This means that if you use it consistently if
+effectively gives you nested transactions.
+
+C<$code> is called with the same context as this function was called in.
+When C<transactionally> returns, it returns a single value if it was called
+in scalar context, or a list of values if called in list context.
+
+=cut
+
+{
+    # This is required to keep track of whether we're in a transaction already.
+    # The keys are the stringifications of database handles, just in case
+    # you're using this with more than one handle.
+    my %level;
+
+    sub transactionally
+    {
+        my ($db, $code, @args) = @_;
+
+        my $in_transaction = $level{$db};
+        ++$level{$db};
+
+        $db->begin_work unless $in_transaction;
+
+        # Call the code, using the same context as we were called in.
+        my @ret;
+        if (wantarray) {
+            @ret = eval { $code->(@args) };
+        }
+        elsif (defined wantarray) {
+            $ret[0] = eval { $code->(@args) };
+        }
+        else {
+            eval { $code->(@args) };
+        }
+
+        if ($in_transaction) {
+            --$level{$db};
+        }
+        else {
+            delete $level{$db};
+        }
+
+        if ($@) {
+            $db->rollback unless $in_transaction;
+            die $@;
+        }
+
+        $db->commit unless $in_transaction;
+
+        return wantarray ? @ret : $ret[0];
+    }
+}
+
 =item wc_file_data($db, $file_id)
 
 Returns a reference to the data (content) of the C<wc_file> record identified
@@ -754,7 +813,7 @@ sub guid_first_last_times
     return (parse_db_datetime($issued), parse_db_datetime($modified));
 }
 
-=item wc_property($cms, $wc_id, $file_id, $content_type, $data, $allow_data_ref)
+=item wc_set_file_data($cms, $wc_id, $file_id, $content_type, $data, $allow_data_ref)
 
 Warning: this should currently only be used for proper updates from the
 repository, not making live uncommitted changes in a working copy.  Doing
@@ -830,6 +889,7 @@ sub wc_set_file_data
             set data = ?,
                 data_len = ?,
                 data_sha1 = ?,
+                data_from_file_id = null,
                 image_width = ?,
                 image_height = ?
             where id = ?
@@ -864,20 +924,22 @@ sub mint_guid
     my ($cms, $is_dir, $path, $revnum) = @_;
     my $db = $cms->{db};
 
-    my $guid_id = db_insert($db, file_guid =>
-        is_dir => ($is_dir ? 1 : 0),
-        uri => 'x-temp:',
-        first_revnum => $revnum,
-        last_changed_revnum => $revnum,
-    );
+    return transactionally($db, sub {
+        my $guid_id = db_insert($db, file_guid =>
+            is_dir => ($is_dir ? 1 : 0),
+            uri => 'x-temp:',
+            first_revnum => $revnum,
+            last_changed_revnum => $revnum,
+        );
 
-    my $entity = $cms->guid_entity($path);
-    my $guid_uri = "tag:$entity:$guid_id";
-    db_update($db, file_guid => $guid_id,
-        uri => $guid_uri,
-    );
+        my $entity = $cms->guid_entity($path);
+        my $guid_uri = "tag:$entity:$guid_id";
+        db_update($db, file_guid => $guid_id,
+            uri => $guid_uri,
+        );
 
-    return ($guid_id, $guid_uri);
+        return ($guid_id, $guid_uri);
+    });
 }
 
 =item load_class($class)
@@ -908,7 +970,7 @@ This method is used to load generator classes and plugins.
 =item instantiate_generator($cms, $class, $root_file)
 
 Create a generator object from the Perl class C<$class>, passing in the
-information generator classes except for their constructors.
+information generator classes expect for their constructors.
 C<$root_file>, which should be a L<Daizu::File> object, is passed to the
 generator and as also used to find the configuration information, if
 any, for this generator instance.  Typically C<$root_file> will be the
@@ -948,31 +1010,51 @@ it does so for all files in working copy C<$wc_id>, and the return
 values are each true if I<any> of the changes include new or updated
 redirects or 'gone' files.
 
-TODO - each file's URLs are updated in a separate database transaction,
-whereas really the whole thing should be done in a single transaction.
+Any URLs for files which no longer exist in the working copy are marked
+as 'gone'.
+
+All of this is done in a single database transaction.
 
 =cut
 
 sub update_all_file_urls
 {
     my ($cms, $wc_id) = @_;
+    my $db = $cms->{db};
 
-    my $sth = $cms->db->prepare(q{
-        select id
-        from wc_file
-        where wc_id = ?
+    return transactionally($db, sub {
+        my $sth = $db->prepare(q{
+            select id
+            from wc_file
+            where wc_id = ?
+        });
+        $sth->execute($wc_id);
+
+        my ($redirects_changed, $gone_changed);
+        while (my ($file_id) = $sth->fetchrow_array) {
+            my $file = Daizu::File->new($cms, $file_id);
+            my ($rc, $gc) = $file->update_urls_in_db;
+            $redirects_changed = 1 if $rc;
+            $gone_changed = 1 if $gc;
+        }
+
+        $db->do(q{
+            update url
+            set status = 'G',
+                redirect_to_id = null
+            where wc_id = ?
+              and guid_id in (
+                select u.guid_id
+                from url u
+                left outer join wc_file f on f.wc_id = u.wc_id and
+                                             f.guid_id = u.guid_id
+                where u.wc_id = ?
+                  and f.id is null
+              )
+        }, undef, $wc_id, $wc_id);
+
+        return ($redirects_changed, $gone_changed);
     });
-    $sth->execute($wc_id);
-
-    my ($redirects_changed, $gone_changed);
-    while (my ($file_id) = $sth->fetchrow_array) {
-        my $file = Daizu::File->new($cms, $file_id);
-        my ($rc, $gc) = $file->update_urls_in_db;
-        $redirects_changed = 1 if $rc;
-        $gone_changed = 1 if $gc;
-    }
-
-    return ($redirects_changed, $gone_changed);
 }
 
 =item add_xml_elem($parent, $name, $content, %attr)
@@ -1044,6 +1126,112 @@ sub xml_croak
     my ($filename, $node, $msg) = @_;
     my $line_number = $node->line_number;
     croak "$filename:$line_number: $msg";
+}
+
+=item expand_xinclude($db, $doc, $wc_id, $path)
+
+Expand XInclude elements in C<$doc> (a L<XML::LibXML::Document> object).
+This is used for the content of articles, after it has been returned from
+an article loader plugin but before it is passed to article filter plugins.
+The XML DOM is updated in place.
+
+A list of the IDs of any included files is returned.  When loading articles
+this list is stored in the C<wc_article_included_files> table, so that
+whenever one of the file's content is changed, the article can be reloaded
+to include the new version.
+
+Any XInclude elements present must use include from a C<daizu:> URI.
+Other URIs, like C<file:>, are not allowed, since that would
+be a security hole if the content was supplied by a user who wouldn't
+normally have access to the filesystem.  The C<daizu:> URI scheme is
+specific to this function, and causes data to be loaded from the database
+working copy C<$wc_id> (which should be the same as the file from which
+the article content came).
+
+C<$path> should be the path of the file from which the content comes.
+This is used to resolve relative paths when including.  Actually, you
+can use any base URI by including an C<xml:base> attribute in the content,
+but this function adds one (based on C<$path>) to the root element if it
+doesn't already exist.  This not only allows you to use paths relative
+to C<$path>, but also means you don't have to specify the C<daizu:>
+URI prefix in your content.
+
+=cut
+
+sub expand_xinclude
+{
+    my ($db, $doc, $wc_id, $path) = @_;
+
+    my $parser = XML::LibXML->new;
+    $parser->expand_xinclude(1);
+
+    my @included_file;
+
+    my $input_callbacks = XML::LibXML::InputCallback->new;
+    $input_callbacks->register_callbacks([
+        \&_match_uri,
+        sub { _open_uri($db, $wc_id, \@included_file, @_) },
+        \&_read_uri,
+        \&_close_uri,
+    ]);
+    $parser->input_callbacks($input_callbacks);
+
+    my $root = $doc->documentElement;
+    $root->setAttribute('xml:base' => 'daizu:///' . url_encode($path))
+        unless $root->hasAttribute('xml:base');
+
+    $parser->process_xincludes($doc);
+
+    return @included_file;
+}
+
+# This set of callback functions are used to handle the special non-standard
+# 'daizu:' URI scheme for loading file content from the working copy the
+# article file comes from.
+# Other URI schemes are disallowed for security reasons.
+sub _match_uri
+{
+    my ($uri) = @_;
+    croak "articles may only use XInclude for 'daizu:' URIs, not '$uri'"
+        unless $uri =~ /^daizu:/i;
+    return 1;
+}
+
+sub _open_uri
+{
+    my ($db, $wc_id, $included_file, $uri) = @_;
+
+    my $path = $uri;
+    $path =~ s!^daizu:/*!!i;
+    my ($file_id, $is_dir) = db_select($db, 'wc_file',
+        { wc_id => $wc_id, path => $path },
+        qw( id is_dir ),
+    );
+    croak "can't read '$uri' included with XInclude, it's a directory"
+        if $is_dir;
+
+    my $data = wc_file_data($db, $file_id);
+    open my $fh, '<', $data
+        or die "error opening in-memory file to read '$uri': $!";
+
+    push @$included_file, $file_id;
+    return $fh;
+}
+
+sub _read_uri
+{
+    my ($fh, $length) = @_;
+    my $buffer;
+    my $ret = read $fh, $buffer, $length;
+    die "error reading from file: $!"
+        unless defined $ret;
+    return $buffer;
+}
+
+sub _close_uri
+{
+    my ($fh) = @_;
+    close $fh;
 }
 
 =item branch_id($db, $branch)

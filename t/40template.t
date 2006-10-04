@@ -2,11 +2,13 @@
 use warnings;
 use strict;
 
-use Test::More tests => 80;
+use Test::More;
 use Carp::Assert qw( assert );
 use Daizu;
 use Daizu::TTProvider;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
+
+init_tests(80);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;
@@ -23,14 +25,23 @@ assert(defined $_)
 
 
 # article_template_overrides() and article_template_variables()
-isa_ok($homepage_file->generator->article_template_overrides, 'HASH',
-       'Daizu::Gen->article_template_overrides');
-isa_ok($homepage_file->generator->article_template_variables, 'HASH',
-       'Daizu::Gen->article_template_variables');
-isa_ok($blog_article_file->generator->article_template_overrides, 'HASH',
-       'Daizu::Gen::Blog->article_template_overrides');
-isa_ok($blog_article_file->generator->article_template_variables, 'HASH',
-       'Daizu::Gen::Blog->article_template_variables');
+{
+    my $gen = $homepage_file->generator;
+    my ($url_info) = $gen->urls_info($homepage_file);
+    isa_ok($gen->article_template_overrides($homepage_file, $url_info), 'HASH',
+           'Daizu::Gen->article_template_overrides');
+    isa_ok($gen->article_template_variables($homepage_file, $url_info), 'HASH',
+           'Daizu::Gen->article_template_variables');
+
+    $gen = $blog_article_file->generator;
+    ($url_info) = $gen->urls_info($blog_article_file);
+    isa_ok($gen->article_template_overrides($blog_article_file, $url_info),
+           'HASH',
+           'Daizu::Gen::Blog->article_template_overrides');
+    isa_ok($gen->article_template_variables($blog_article_file, $url_info),
+           'HASH',
+           'Daizu::Gen::Blog->article_template_variables');
+}
 
 
 # Daizu::Gen->navigation_menu

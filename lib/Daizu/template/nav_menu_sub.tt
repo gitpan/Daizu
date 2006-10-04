@@ -1,6 +1,12 @@
 <ul>
  [%- FOREACH item = items %]
-  <li[% IF item.link %]><a href="[% item.link |html %]">[% item.short_title |encode |html %]</a>[% ELSE %] class="current">[% item.short_title |encode |html %][% END %]
+  <li[% IF item.link %]><a href="[% item.link |html %]"[%
+        ELSE %] class="current"[%
+        END %][%
+        IF item.short_title %] title="[% item.title |encode |html %]">[% item.short_title |encode |html %][%
+        ELSE %]>[% item.title |encode |html %][%
+        END %][%
+        IF item.link %]</a>[% END %]
    [%- IF item.children.size %]
     [% INCLUDE nav_menu_sub.tt items = item.children %]
    [% END -%]

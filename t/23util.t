@@ -2,11 +2,11 @@
 use warnings;
 use strict;
 
-use Test::More tests => 93;
+use Test::More;
 use Carp::Assert qw( assert );
 use Encode qw( encode );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Util qw(
     trim trim_with_empty_null like_escape pgregex_escape
     url_encode url_decode
@@ -20,6 +20,8 @@ use Daizu::Util qw(
     add_xml_elem xml_attr xml_croak
     branch_id daizu_data_dir
 );
+
+init_tests(98);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;
@@ -248,6 +250,21 @@ is(db_row_id($db, 'branch', path => 'trunk'), 1, 'db_row_id: path=trunk');
 }
 
 # db_select_col
+{
+    my @revnums = db_select_col($db, revision => {}, 'revnum');
+    my $latest_revnum = $cms->ra->get_latest_revnum;
+    is(scalar @revnums, $latest_revnum, 'db_select_col: num revisions');
+    @revnums = sort { $a <=> $b } @revnums;
+    is($revnums[0], 1, 'db_select_col: first revnum');
+    is($revnums[-1], $latest_revnum, 'db_select_col: last revnum');
+
+    my @names = db_select_col($db, 'person',
+        { id => 1, username => 'geoff' },
+        'username',
+    );
+    is(scalar @names, 1, 'db_select_col: num names');
+    is($names[0], 'geoff', 'db_select_col: correct name');
+}
 
 # db_insert
 

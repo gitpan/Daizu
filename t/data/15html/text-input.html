@@ -1,4 +1,8 @@
-<p>A short paragraph.</p>
+<body xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:daizu="http://www.daizucms.org/ns/html-extension/"
+      xmlns:xi="http://www.w3.org/2001/XInclude"
+      xml:base="daizu:///foo.com/blog/2006/fish-fingers/article-1.html"
+><p>A short paragraph.</p>
 
 
 <p>A long paragraph:
@@ -19,7 +23,7 @@ URL, such as in an RSS feed or on an index page, while ensuring that any links o
   <li>List item 2 
     <ul><li>List item 2.1</li><li> List item 2.2</li></ul>
 </li>
-<li>List item&nbsp;3</li>
+<li>List item&#xA0;3</li>
 </ul> 
 
 <p>Numbered list:</p>
@@ -28,7 +32,7 @@ URL, such as in an RSS feed or on an index page, while ensuring that any links o
   <li>List item 2 
     <ol><li>List item 2.1</li><li> List item 2.2</li></ol>
 </li>
-<li>List item&nbsp;3</li>
+<li>List item&#xA0;3</li>
 </ol> 
 
 <p>Bullet list containing block markup:</p>
@@ -92,3 +96,4 @@ span elements can be safely ignored when converting to text):</p>
 
 <p>Images: alt=[<img src="foo.png" alt=" foo bar " />]
          noalt=[<img src="bar.png" alt="" />]</p>
+</body>

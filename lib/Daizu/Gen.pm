@@ -8,7 +8,7 @@ use Template;
 use XML::LibXML;
 use Compress::Zlib qw( gzopen $gzerrno );
 use URI;
-use Encode qw( encode );
+use Encode qw( decode encode );
 use File::Temp qw( tempfile );
 use Daizu::TTProvider;
 use Daizu::HTML qw(
@@ -60,7 +60,7 @@ of is the C<google-sitemap> element shown here:
 
 =for syntax-highlight xml
 
-    <config path="example.org">
+    <config path="example.com">
      <generator class="Daizu::Gen">
       <google-sitemap />
      </generator>
@@ -68,7 +68,7 @@ of is the C<google-sitemap> element shown here:
 
 The sitemap URL will be generated from the directory at the path indicated.
 It must be a directory, not a plain file.  In this case, the sitemap is
-likely to have a URL like C<http://example.org/sitemap.xml.gz>.
+likely to have a URL like C<http://example.com/sitemap.xml.gz>.
 
 The C<google-sitemap> element may an optional C<url> attribute, which
 should be a relative or absolute URL at which to publish the sitemap file.
@@ -150,7 +150,7 @@ sub base_url
     return undef if $file->{name} =~ /\A(?:$Daizu::HIDING_FILENAMES)\z/o;
 
     # URL set with daizu:url property.
-    return URI->new($file->{base_url}) if defined $file->{base_url};
+    return URI->new($file->{custom_url}) if defined $file->{custom_url};
 
     # No user-defined URL at top-level.
     return undef unless defined $file->{parent_id};
@@ -607,16 +607,20 @@ sub google_sitemap
             select u.url, f.modified_at, f.article
             from url u
             inner join wc_file f on u.wc_id = f.wc_id and u.guid_id = f.guid_id
-            where u.status = 'A'
-              and u.method <> 'google_sitemap'
-              and (u.content_type like 'text/%' or article)
+            where f.wc_id = ?
+              and u.status = 'A'
+              and not f.no_index
+              and u.content_type in
+                  ('application/xhtml+xml', 'text/html', 'application/pdf')
               and u.url like ?
+            order by u.url
         });
-        $sth->execute(like_escape($base_url) . '%');
+        $sth->execute($file->{wc_id}, like_escape($base_url) . '%');
 
         while (my ($url, $updated, $article) = $sth->fetchrow_array) {
             next if length($url) >= 2048;   # Google won't accept this
 
+            $sitemap->appendText("\n");
             my $elem = add_xml_elem($sitemap, 'url');
             add_xml_elem($elem, loc => $url);
             $updated = parse_db_datetime($updated);
@@ -631,6 +635,7 @@ sub google_sitemap
             or die 'error writing compressed sitemap file: ' . $gz->gzerror;
         $gz->gzclose
             and die 'error closing compressed sitemap file: ' . $gz->gzerror;
+        $url->{fh} = undef;     # don't try to close it again later
     }
 }
 
@@ -678,6 +683,10 @@ sub scaled_image
         while (<$tmp_fh>) {
             print $out_fh $_;
         }
+
+        close $tmp_fh;
+        unlink $tmp_filename
+            or warn "error removing temporary file '$tmp_filename': $!";
     }
 }
 
@@ -750,23 +759,26 @@ sub navigation_menu
         last if $url->eq($old_url);
         last if $path eq '/';
 
-        my ($file_id) = $db->selectrow_array(q{
-            select f.id
-            from wc_file f
-            inner join url u on u.guid_id = f.guid_id
-            where u.wc_id = ?
-              and f.wc_id = ?
-              and u.url = ?
-              and status = 'A'
-              and not f.retired
-        }, undef, $wc_id, $wc_id, $url);
+        my ($file_id, $title, $short_title) = $db->selectrow_array(q{
+            select id, title, short_title
+            from wc_file
+            where wc_id = ?
+              and article_pages_url = ?
+              and article
+              and not retired
+        }, undef, $wc_id, $url);
         next unless defined $file_id;
 
         # Skip if we've already got this in the menu.
         next if  @above && $file_id == $above[-1]{id};
         next if !@above && $file_id == $cur_file->{id};
 
-        unshift @above, Daizu::File->new($cms, $file_id);
+        unshift @above, {
+            id => $file_id,
+            link => $url->clone,
+            title => decode('UTF-8', $title, Encode::FB_CROAK),
+            short_title => decode('UTF-8', $short_title, Encode::FB_CROAK),
+        };
     }
 
     # Turn that linear list of ancestors into a hiearchical structure.
@@ -778,9 +790,9 @@ sub navigation_menu
     for (@above) {
         my $submenu = [];
         push @$children, {
-            link => $_->permalink->rel($cur_url),
-            title => $_->title,
-            short_title => $_->short_title,
+            link => $_->{link}->rel($cur_url),
+            title => $_->{title},
+            short_title => $_->{short_title},
             children => $submenu,
         };
         $children = $submenu;
@@ -826,31 +838,81 @@ sub _menu_url_children
     my $db = $cms->{db};
     assert($parent_url =~ m!/$!) if DEBUG;
 
-    my $sth = $db->prepare(q{
-        select f.id, u.url
+    # Search for an appropriate 'daizu:nav-menu' property.  If the parent
+    # file doesn't have one, then look at the directory it's in if it's
+    # an article with an index-like name.
+    my ($parent_id, $grand_parent_id, $parent_name, $parent_is_dir) =
+    $db->selectrow_array(q{
+        select f.id, f.parent_id, f.name
         from wc_file f
-        inner join url u on u.guid_id = f.guid_id and u.wc_id = f.wc_id
-        where u.content_type = 'text/html'
-          and u.wc_id = ?
-          and u.url ~ ('^' || ? || '[^/]+/?$')
+        inner join url u on u.wc_id = f.wc_id and u.guid_id = f.guid_id
+        where u.wc_id = ?
+          and u.url = ?
           and u.status = 'A'
-          and not f.retired
-        order by u.url
-    });
-    $sth->execute($wc_id, pgregex_escape($parent_url));
+    }, undef, $wc_id, $parent_url);
+
+    my ($menu_file_id, $menu_prop);
+    if (defined $parent_id) {
+        $menu_file_id = $parent_id;
+        $menu_prop = db_select($db, 'wc_property',
+            { file_id => $parent_id, name => 'daizu:nav-menu' },
+            'value',
+        );
+    }
+    if (!defined $menu_prop && defined $grand_parent_id &&
+        !$parent_is_dir && $parent_name =~ /^_index\./)
+    {
+        $menu_file_id = $grand_parent_id;
+        $menu_prop = db_select($db, 'wc_property',
+            { file_id => $grand_parent_id, name => 'daizu:nav-menu' },
+            'value',
+        );
+    }
 
     my $has_children;
-    while (my ($file_id, $url) = $sth->fetchrow_array) {
-        my $file = Daizu::File->new($cms, $file_id);
-        # TODO - should this be permalink or $url?
-        my $link = $file->permalink;
-        push @$menu, {
-            ($link->eq($cur_url) ? () : (link => $link->rel($cur_url))),
-            title => $file->title,
-            short_title => $file->short_title,
-            children => [],
-        };
-        $has_children = 1;
+    if (defined $menu_prop) {
+        # Return menu items from the 'daizu:nav-menu' property.
+        $menu_prop = decode('UTF-8', $menu_prop, Encode::FB_CROAK),
+        my $menu_file = Daizu::File->new($cms, $menu_file_id);
+        my $base_url = $menu_file->permalink;
+        for my $line (split /[\x0A\x0D]/, $menu_prop) {
+            $line = trim($line);
+            next if $line eq '';
+            my ($url, $title) = split ' ', $line, 2;
+            die "bad line '$line' in 'daizu:nav-menu' on file $menu_file_id"
+                unless defined $url && defined $title;
+            $url = URI->new_abs($url, $base_url);
+            push @$menu, {
+                ($url->eq($cur_url) ? () : (link => $url->rel($cur_url))),
+                title => $title,
+                children => [],
+            };
+            $has_children = 1;
+        }
+    }
+    else {
+        # Return menu items for articles with appropriate URLs.
+        my $sth = $db->prepare(q{
+            select article_pages_url, title, short_title
+            from wc_file
+            where wc_id = ?
+              and article_pages_url ~ ('^' || ? || '[^/]+/?$')
+              and article
+              and not retired
+            order by article_pages_url
+        });
+        $sth->execute($wc_id, pgregex_escape($parent_url));
+
+        while (my ($url, $title, $short_title) = $sth->fetchrow_array) {
+            $url = URI->new($url);
+            push @$menu, {
+                ($url->eq($cur_url) ? () : (link => $url->rel($cur_url))),
+                title => decode('UTF-8', $title, Encode::FB_CROAK),
+                short_title => decode('UTF-8', $short_title, Encode::FB_CROAK),
+                children => [],
+            };
+            $has_children = 1;
+        }
     }
 
     return $has_children;

@@ -2,12 +2,14 @@
 use warnings;
 use strict;
 
-use Test::More tests => 137;
+use Test::More;
 use Path::Class qw( file );
 use Daizu;
-use Daizu::Test;
+use Daizu::Test qw( init_tests );
 use Daizu::Feed;
 use Daizu::Util qw( validate_date rfc2822_datetime );
+
+init_tests(137);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $wc = $cms->live_wc;

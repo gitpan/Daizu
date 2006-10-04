@@ -7,7 +7,7 @@ use base 'Daizu::Gen';
 use DateTime;
 use DateTime::Format::Pg;
 use Carp::Assert qw( assert DEBUG );
-use Encode qw( encode );
+use Encode qw( encode decode );
 use Daizu;
 use Daizu::Feed;
 use Daizu::Util qw(
@@ -16,6 +16,10 @@ use Daizu::Util qw(
     db_select
     xml_attr xml_croak
 );
+
+# This is used for the generator name below.  I want it in a normal
+# variable so that it's easier to interpolate into SQL queries.
+my $CLASS = __PACKAGE__;
 
 =head1 NAME
 
@@ -235,7 +239,7 @@ sub custom_base_url
     return $self->SUPER::custom_base_url($file)
         if $file->{id} == $self->{root_file}{id};
 
-    # No base URL for blog as a whole.
+    # The base URL for blog as a whole.
     my $blog_url = $self->base_url($self->{root_file});
     return undef unless defined $blog_url;
 
@@ -336,6 +340,7 @@ sub root_dir_urls_info
         from wc_file
         where wc_id = ?
           and article
+          and generator = '$CLASS'
           and not retired
           and path like ?
           and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
@@ -380,57 +385,55 @@ sub article_template_variables
     my ($self, $file, $url_info) = @_;
     my $cms = $self->{cms};
 
-    # TODO - this is a kludge because $self->{root_file} isn't right yet.
-    my $root_generator = $file->generator;
-
     my $feed_url_info;
-    for ($root_generator->urls_info($root_generator->{root_file})) {
-        next unless $_->{generator} eq 'Daizu::Gen::Blog' &&
-                    $_->{method} eq 'feed';
+    for ($self->urls_info($self->{root_file})) {
+        next unless $_->{generator} eq $CLASS && $_->{method} eq 'feed';
         $feed_url_info = $_;
         last;
     }
     assert(defined $feed_url_info) if DEBUG;
 
     my %links;
-    my ($prev_id, $prev_url, $prev_type) = $cms->{db}->selectrow_array(q{
-        select f.id, u.url, u.content_type
+    my ($prev_url, $prev_type, $prev_title) = $cms->{db}->selectrow_array(qq{
+        select u.url, u.content_type, f.title
         from wc_file f
         inner join url u on u.wc_id = f.wc_id and u.guid_id = f.guid_id
         where f.wc_id = ?
-          and u.generator = 'Daizu::Gen::Blog'
+          and u.generator = '$CLASS'
           and u.method = 'article'
+          and u.status = 'A'
           and f.issued_at < ?
           and path like ?
-        order by issued_at desc, id desc
+        order by f.issued_at desc, f.id desc
         limit 1
     }, undef, $file->{wc_id}, $file->{issued_at},
               like_escape($self->{root_file}{path}) . '/%');
-    if (defined $prev_id) {
+    if (defined $prev_url) {
         $links{prev} = {
             href => URI->new($prev_url),
             type => $prev_type,
-            title => Daizu::File->new($cms, $prev_id)->title,
+            title => decode('UTF-8', $prev_title, Encode::FB_CROAK),
         };
     }
-    my ($next_id, $next_url, $next_type) = $cms->{db}->selectrow_array(q{
-        select f.id, u.url, u.content_type
+    my ($next_url, $next_type, $next_title) = $cms->{db}->selectrow_array(qq{
+        select u.url, u.content_type, f.title
         from wc_file f
         inner join url u on u.wc_id = f.wc_id and u.guid_id = f.guid_id
         where f.wc_id = ?
-          and u.generator = 'Daizu::Gen::Blog'
+          and u.generator = '$CLASS'
           and u.method = 'article'
+          and u.status = 'A'
           and f.issued_at > ?
           and path like ?
-        order by issued_at, id
+        order by f.issued_at, f.id
         limit 1
     }, undef, $file->{wc_id}, $file->{issued_at},
               like_escape($self->{root_file}{path}) . '/%');
-    if (defined $next_id) {
+    if (defined $next_url) {
         $links{next} = {
             href => URI->new($next_url),
             type => $next_type,
-            title => Daizu::File->new($cms, $next_id)->title,
+            title => decode('UTF-8', $next_title, Encode::FB_CROAK),
         };
     }
 
@@ -472,10 +475,12 @@ sub homepage
     my $HOW_MANY = 10;       # TODO - put this in the config
 
     for my $url (@$urls) {
-        my $sth = $cms->{db}->prepare(q{
-            select id from wc_file
+        my $sth = $cms->{db}->prepare(qq{
+            select id
+            from wc_file
             where wc_id = ?
               and article
+              and generator = '$CLASS'
               and not retired
               and path like ?
             order by issued_at desc, id desc
@@ -511,11 +516,12 @@ sub feed
     my ($self, $file, $urls) = @_;
     my $cms = $self->{cms};
 
-    my $sth = $cms->{db}->prepare(q{
+    my $sth = $cms->{db}->prepare(qq{
         select id
         from wc_file
         where wc_id = ?
           and article
+          and generator = '$CLASS'
           and not retired
           and path like ?
         order by issued_at desc, id desc
@@ -576,11 +582,13 @@ sub year_archive
             unless $url->{argument} =~ /^(\d+)$/;
         my $year = $1;
 
-        my $sth = $cms->{db}->prepare(q{
-            select id, extract(month from issued_at)
+        my $sth = $cms->{db}->prepare(qq{
+            select id, extract(month from issued_at), article_pages_url,
+                   title, description, issued_at
             from wc_file
             where wc_id = ?
               and article
+              and generator = '$CLASS'
               and not retired
               and path like ?
               and extract(year from issued_at) = ?
@@ -591,28 +599,36 @@ sub year_archive
         my @months;
         my $cur_month;
         my $cur_articles;
-        while (my ($id, $month) = $sth->fetchrow_array) {
+        while (my ($id, $month, $permalink, $title, $description, $issued_at)
+                   = $sth->fetchrow_array)
+        {
             if (!defined $cur_month || $cur_month != $month) {
                 $cur_month = $month;
                 $cur_articles = [];
                 push @months, {
                     month_url => sprintf('%02d/', $month),
-                    month_name => DateTime->new(year => $year, month => $month)
-                                          ->strftime('%B'),
+                    month_date => DateTime->new(year => $year, month => $month),
                     articles => $cur_articles,
                 };
             }
-            push @$cur_articles, Daizu::File->new($cms, $id);
+            push @$cur_articles, {
+                id => $id,
+                permalink => $permalink,
+                title => decode('UTF-8', $title, Encode::FB_CROAK),
+                description => decode('UTF-8', $description, Encode::FB_CROAK),
+                issued_at => parse_db_datetime($issued_at),
+            };
         }
 
         my %links;
-        my ($prev_url, $prev_arg, $prev_type) = $cms->{db}->selectrow_array(q{
+        my ($prev_url, $prev_arg, $prev_type) = $cms->{db}->selectrow_array(qq{
             select url, argument, content_type
             from url
             where wc_id = ?
               and guid_id = ?
-              and generator = 'Daizu::Gen::Blog'
+              and generator = '$CLASS'
               and method = 'year_archive'
+              and status = 'A'
               and argument < ?
             order by argument desc
             limit 1
@@ -624,13 +640,14 @@ sub year_archive
                 title => _year_archive_title($prev_arg),
             };
         }
-        my ($next_url, $next_arg, $next_type) = $cms->{db}->selectrow_array(q{
+        my ($next_url, $next_arg, $next_type) = $cms->{db}->selectrow_array(qq{
             select url, argument, content_type
             from url
             where wc_id = ?
               and guid_id = ?
-              and generator = 'Daizu::Gen::Blog'
+              and generator = '$CLASS'
               and method = 'year_archive'
+              and status = 'A'
               and argument > ?
             order by argument
             limit 1
@@ -679,11 +696,12 @@ sub month_archive
         my $year = $1;
         my $month = $2;
 
-        my $sth = $cms->{db}->prepare(q{
-            select id
+        my $sth = $cms->{db}->prepare(qq{
+            select id, article_pages_url, title, description, issued_at
             from wc_file
             where wc_id = ?
               and article
+              and generator = '$CLASS'
               and not retired
               and path like ?
               and extract(year from issued_at) = ?
@@ -694,18 +712,27 @@ sub month_archive
                       $year, $month);
 
         my @articles;
-        while (my ($id, $month) = $sth->fetchrow_array) {
-            push @articles, Daizu::File->new($cms, $id);
+        while (my ($id, $permalink, $title, $description, $issued_at)
+                   = $sth->fetchrow_array)
+        {
+            push @articles, {
+                id => $id,
+                permalink => $permalink,
+                title => decode('UTF-8', $title, Encode::FB_CROAK),
+                description => decode('UTF-8', $description, Encode::FB_CROAK),
+                issued_at => parse_db_datetime($issued_at),
+            };
         }
 
         my %links;
-        my ($prev_url, $prev_arg, $prev_type) = $cms->{db}->selectrow_array(q{
+        my ($prev_url, $prev_arg, $prev_type) = $cms->{db}->selectrow_array(qq{
             select url, argument, content_type
             from url
             where wc_id = ?
               and guid_id = ?
-              and generator = 'Daizu::Gen::Blog'
+              and generator = '$CLASS'
               and method = 'month_archive'
+              and status = 'A'
               and argument < ?
             order by argument desc
             limit 1
@@ -717,13 +744,14 @@ sub month_archive
                 title => _month_archive_title(split ' ', $prev_arg),
             };
         }
-        my ($next_url, $next_arg, $next_type) = $cms->{db}->selectrow_array(q{
+        my ($next_url, $next_arg, $next_type) = $cms->{db}->selectrow_array(qq{
             select url, argument, content_type
             from url
             where wc_id = ?
               and guid_id = ?
-              and generator = 'Daizu::Gen::Blog'
+              and generator = '$CLASS'
               and method = 'month_archive'
+              and status = 'A'
               and argument > ?
             order by argument
             limit 1
@@ -790,7 +818,7 @@ sub navigation_menu
     # efficiently determine which URL to leave without a link.
     my ($cur_year_arg, $cur_month_arg);
     if ($cur_file->{guid_id} == $root_file->{guid_id} &&
-        $cur_url_info->{generator} eq 'Daizu::Gen::Blog')
+        $cur_url_info->{generator} eq $CLASS)
     {
         $cur_year_arg = $cur_url_info->{argument}
             if $cur_url_info->{method} eq 'year_archive';
@@ -798,22 +826,24 @@ sub navigation_menu
             if $cur_url_info->{method} eq 'month_archive';
     }
 
-    my $year_sth = $db->prepare(q{
+    my $year_sth = $db->prepare(qq{
         select url, argument
         from url
         where wc_id = ?
           and guid_id = ?
-          and generator = 'Daizu::Gen::Blog'
+          and generator = '$CLASS'
           and method = 'year_archive'
-        order by argument
+          and status = 'A'
+        order by argument desc
     });
-    my $month_sth = $db->prepare(q{
+    my $month_sth = $db->prepare(qq{
         select url, argument
         from url
         where wc_id = ?
           and guid_id = ?
-          and generator = 'Daizu::Gen::Blog'
+          and generator = '$CLASS'
           and method = 'month_archive'
+          and status = 'A'
           and argument like ? || ' %'
         order by argument
     });
@@ -849,6 +879,7 @@ sub navigation_menu
                                        ->strftime('%B'),
                 children => [],
             };
+            ++$months_included;
         }
     }
 

@@ -73,16 +73,16 @@ will have a white background:
 
 =for syntax-highlight css
 
-    span.synComment    { color: #0000FF }
-    span.synConstant   { color: #FF00FF }
-    span.synIdentifier { color: #008B8B }
-    span.synStatement  { color: #A52A2A ; font-weight: bold }
-    span.synPreProc    { color: #A020F0 }
-    span.synType       { color: #2E8B57 ; font-weight: bold }
-    span.synSpecial    { color: #6A5ACD }
-    span.synUnderlined { color: #000000 ; text-decoration: underline }
-    span.synError      { color: #FFFFFF ; background: #FF0000 none }
-    span.synTodo       { color: #0000FF ; background: #FFFF00 none }
+    span.syn-comment    { color: #0000FF }
+    span.syn-constant   { color: #FF00FF }
+    span.syn-identifier { color: #008B8B }
+    span.syn-statement  { color: #A52A2A ; font-weight: bold }
+    span.syn-preproc    { color: #A020F0 }
+    span.syn-type       { color: #2E8B57 ; font-weight: bold }
+    span.syn-special    { color: #6A5ACD }
+    span.syn-underlined { color: #000000 ; text-decoration: underline }
+    span.syn-error      { color: #FFFFFF ; background: #FF0000 none }
+    span.syn-todo       { color: #0000FF ; background: #FFFF00 none }
 
 The Daizu CMS default stylesheet has these rules included already.
 
@@ -149,13 +149,16 @@ sub do_syntax_highlighting
                                              $output_elem_name);
         $new_elem->setAttribute(class => 'SyntaxHighlight');
         for (@{$marked}) {
-            if ($_->[0] eq '') {
-                $new_elem->appendChild(XML::LibXML::Text->new($_->[1]));
+            my ($class, $text) = @$_;
+            $text = XML::LibXML::Text->new($text);
+
+            if ($class eq '') {
+                $new_elem->appendChild($text);
             }
             else {
                 my $elem = XML::LibXML::Element->new('span');
-                $elem->setAttribute(class => "syn$_->[0]");
-                $elem->appendChild(XML::LibXML::Text->new($_->[1]));
+                $elem->setAttribute(class => 'syn-' . lc($class));
+                $elem->appendChild($text);
                 $new_elem->appendChild($elem);
             }
         }

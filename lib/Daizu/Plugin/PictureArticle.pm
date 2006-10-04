@@ -29,6 +29,10 @@ in the page.  If the image is too big then an additional scaled down
 'thumbnail' image will be generated and included in the page, and will
 be linked to the full size original version.
 
+This example page was generated using this plugin:
+
+L<http://www.daizucms.org/blog/2006/09/pickled-cucumber/>
+
 This plugin will be triggered for any article with a MIME type
 (according to the file's C<svn:mime-type> property) where the first
 part is C<image>, for example C<image/jpeg>.
@@ -65,6 +69,40 @@ that you can specify a maximum width but leave the height unbounded.
 You can use different configuration for different websites, or parts
 of websites, by providing multiple C<plugin> elements in the configuration
 file: a default one and others in C<config> elements with paths.
+
+=head1 PROPERTIES
+
+These are the Subversion properties which you can set on your image
+file when using this plugin:
+
+=over
+
+=item daizu:type
+
+Required.  You must set this to C<article> or the file will just be
+published as an 'unprocessed' file (a normal image rather than a web
+page).
+
+=item svn:mime-type
+
+Required.  This should be something like C<image/jpeg> or C<image/png>.
+
+=item dc:title
+
+Required.  The title of the article.
+
+=item dc:description
+
+Optional, but recommended.  A textual description which will be
+published alongside the image.
+
+=item daizu:alt
+
+Optional.  Text to put in the image's C<alt> attribute in the web
+page.  If this isn't present then an empty C<alt> attribute will be
+used.
+
+=back
 
 =cut
 
@@ -125,8 +163,8 @@ sub _parse_config
 =item Daizu::Plugin::PictureArticle-E<gt>register($cms, $whole_config, $plugin_config, $path)
 
 Called by Daizu CMS when the plugin is registered.  It registers the
-L<picture_to_article()|/$self-E<gt>picture_to_article($cms, $file)>
-method as an article parser for all MIME types like 'image/*'.
+L<load_article()|/$self-E<gt>load_article($cms, $file)>
+method as an article loader for all MIME types like 'image/*'.
 
 =cut
 
@@ -134,21 +172,20 @@ sub register
 {
     my ($class, $cms, $whole_config, $plugin_config, $path) = @_;
     my $self = bless { config => $plugin_config }, $class;
-    $cms->add_article_parser('image/*', '', $self => 'picture_to_article');
+    $cms->add_article_loader('image/*', '', $self => 'load_article');
 }
 
-=item $self-E<gt>picture_to_article($cms, $file)
+=item $self-E<gt>load_article($cms, $file)
 
-Upgrades C<$file> (which should be a L<Daizu::File> object) to include
-the information necessary for publishing the file as an article.
-Creates an article document to contain the picture, or a thumbnail of
-it if it is too big.
+Returns article content and metadata for C<$file> (which should
+be a L<Daizu::File> object).  The article content returned is a document
+to contain the picture, or a thumbnail of it if it is too big.
 
 Never rejects a file, and therefore always returns true.
 
 =cut
 
-sub picture_to_article
+sub load_article
 {
     my ($self, $cms, $file) = @_;
     $self->_parse_config;
@@ -165,9 +202,13 @@ sub picture_to_article
         $article_url =~ s!\.[^./]+$!.html!
             or $article_url .= '.html';
     }
-    $file->set_article_pages_url($article_url);
-    $file->add_extra_url($file->{name}, $file->{content_type},
-                         'Daizu::Gen', 'unprocessed', '');
+    my @extra_url;
+    push @extra_url, {
+        url => $file->{name},
+        type => $file->{content_type},
+        generator => 'Daizu::Gen',
+        method => 'unprocessed',
+    };
 
     # Filename of the thumbnail image, if any.
     my $thm_filename = $file->{name};
@@ -209,14 +250,20 @@ sub picture_to_article
         assert($thm_wd <= $max_wd && $thm_ht <= $max_ht) if DEBUG;
         assert($thm_wd == $max_wd || $thm_ht == $max_ht) if DEBUG;
 
-        $file->add_extra_url($thm_filename, $file->{content_type},
-                             'Daizu::Gen', 'scaled_image', "$thm_wd $thm_ht");
+        push @extra_url, {
+            url => $thm_filename,
+            type => $file->{content_type},
+            generator => 'Daizu::Gen',
+            method => 'scaled_image',
+            argument => "$thm_wd $thm_ht",
+        };
         $thm_exists = 1;
     }
 
     # Create the article content.
-    $file->init_article_doc;
-    my $body = $file->article_body;
+    my $doc = XML::LibXML::Document->new('1.0', 'UTF-8');
+    my $body = $doc->createElementNS('http://www.w3.org/1999/xhtml', 'body');
+    $doc->setDocumentElement($body);
 
     my $img = XML::LibXML::Element->new('img');
     $img->setAttribute(src => ($thm_exists ? $thm_filename : $file->{name}));
@@ -230,14 +277,13 @@ sub picture_to_article
     $img->setAttribute(height => $thm_ht) if $thm_ht;
 
     my $img_block = add_xml_elem($body, 'div', undef,
-        class => 'daizu-main-thumbnail',
+        class => 'display-picture',
     );
     if ($thm_exists) {
         add_xml_elem($img_block, 'a', $img, href => $file->{name});
         add_xml_elem($img_block, 'br');
         # Since we're linking to the full size image, provide some details
         # about it, mainly as a warning if it's really big.
-        my $pic_size = $file->{data_len};
         my $TIMES = encode('UTF-8', "\xD7");
         my $desc = "full size: $pic_wd$TIMES$pic_ht, " .
                    display_byte_size($file->{data_len});
@@ -249,7 +295,11 @@ sub picture_to_article
         $img_block->appendChild($img);
     }
 
-    return 1;
+    return {
+        content => $doc,
+        pages_url => $article_url,
+        extra_urls => \@extra_url,
+    };
 }
 
 =back
