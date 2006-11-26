@@ -5,7 +5,7 @@ use strict;
 use Test::More;
 use Path::Class qw( file );
 use XML::LibXML;
-use Encode qw( decode );
+use Encode qw( decode encode );
 use Daizu;
 use Daizu::Test qw( init_tests );
 use Daizu::HTML qw(
@@ -15,15 +15,23 @@ use Daizu::HTML qw(
     html_escape_text html_escape_attr
 );
 
-init_tests(16);
+init_tests(20);
 
 # html_escape_text
 is(html_escape_text(q{ < > & ' " }), q{ &lt; &gt; &amp; ' " },
    'html_escape_text');
+is(html_escape_text("<\x{8A9E}>"), "&lt;\x{8A9E}&gt;",
+   'html_escape_text: UTF-8 text');
+is(html_escape_text(enc("<\x{8A9E}>")), enc("&lt;\x{8A9E}&gt;"),
+   'html_escape_text: encoded UTF-8 data');
 
 # html_escape_attr
 is(html_escape_attr(q{ < > & ' " }), q{ &lt; &gt; &amp; ' &quot; },
    'html_escape_attr');
+is(html_escape_attr("<\x{8A9E}>"), "&lt;\x{8A9E}&gt;",
+   'html_escape_attr: UTF-8 text');
+is(html_escape_attr(enc("<\x{8A9E}>")), enc("&lt;\x{8A9E}&gt;"),
+   'html_escape_attr: encoded UTF-8 data');
 
 # dom_node_to_html4
 {
@@ -154,5 +162,7 @@ sub read_xml
     my $input = read_file(@_);
     return XML::LibXML->new->parse_string($input);
 }
+
+sub enc { encode('UTF-8', "$_[0]", Encode::FB_CROAK) }
 
 # vi:ts=4 sw=4 expandtab filetype=perl

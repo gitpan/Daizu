@@ -6,10 +6,8 @@ use SVN::Delta;
 use base 'SVN::Delta::Editor';
 
 use Carp::Assert qw( assert DEBUG );
-use Daizu::Revision qw( file_guid );
 use Daizu::Util qw(
     like_escape
-    db_row_exists db_insert db_update
 );
 
 =head1 NAME
@@ -23,9 +21,6 @@ which files have changed, and what kind of changes were made to them
 (changed content, new properties, etc.).  This information can then be
 used to create a 'publishing job' which dictates what work needs to be
 done to bring the websites up to date.
-
-TODO - note that this isn't currently used, since the publishing jobs
-system is still under development.
 
 =head1 BATONS
 
@@ -61,42 +56,11 @@ as 'trunk'.
 
 =cut
 
-sub _add_file_change
-{
-    my ($db, $job_id, $guid_id, $action) = @_;
-
-    my $exists = db_row_exists($db, 'job_file',
-        job_id => $job_id,
-        guid_id => $guid_id,
-    );
-    if ($exists) {
-        # If it already has a change, then it must have been both added and
-        # deleted, and that implies a path change.  We record that it is
-        # uncertain whether it has other modifications, but after the update
-        # is finished that will be checked to see which content or property
-        # changes really apply in addition to the path change.
-        assert($action ne 'M') if DEBUG;
-        db_update($db, 'job_file',
-            { job_id => $job_id, guid_id => $guid_id },
-            path_changed => 1,
-            action => '?',
-        );
-    }
-    else {
-        db_insert($db, 'job_file',
-            job_id => $job_id,
-            guid_id => $guid_id,
-            action => $action,
-        );
-    }
-}
-
 sub delete_entry
 {
     my ($self, $path) = @_;
     my $db = $self->{db};
     my $branch_path = $self->{branch_path};
-    my $job_id = $self->{job_id};
 
     my $sth;
     if (length($path) <= length($branch_path)) {
@@ -104,12 +68,12 @@ sub delete_entry
         # all the files which were present in the base revision should be
         # deleted.
         assert($path eq substr($branch_path, 0, length($path))) if DEBUG;
-        my $sth = $db->prepare(q{
+        $sth = $db->prepare(q{
             select guid_id
             from file_path
             where branch_id = ?
-              and first_revnum >= ?
-              and last_revnum <= ?
+              and first_revnum <= ?
+              and last_revnum >= ?
         });
         $sth->execute($self->{branch_id}, $self->{start_rev},
                       $self->{start_rev});
@@ -118,21 +82,26 @@ sub delete_entry
         # Delete a file or directory, and anything which was inside it.
         assert($branch_path eq substr($path, 0, length($branch_path))) if DEBUG;
         $path = substr($path, length($branch_path) + 1);
-        my $sth = $db->prepare(q{
+        $sth = $db->prepare(q{
             select guid_id
             from file_path
             where branch_id = ?
-              and first_revnum >= ?
-              and last_revnum <= ?
+              and first_revnum <= ?
+              and last_revnum >= ?
               and (path = ? or path like ?)
         });
         $sth->execute($self->{branch_id}, $self->{start_rev},
                       $self->{start_rev}, $path, like_escape($path) . '/%');
     }
 
+    my $found_one;
+    my $changes = $self->{changes};
     while (my ($guid_id) = $sth->fetchrow_array) {
-        _add_file_change($db, $job_id, $guid_id, 'D');
+        assert(!exists $changes->{$guid_id}) if DEBUG;
+        $changes->{$guid_id} = { _status => 'D' };
+        $found_one = 1;
     }
+    assert($found_one) if DEBUG;
 }
 
 sub add_file
@@ -143,10 +112,22 @@ sub add_file
 
     assert($branch_path eq substr($path, 0, length($branch_path))) if DEBUG;
     $path = substr($path, length($branch_path) + 1);
-    my $guid = file_guid($self->{db}, $self->{branch_id}, $path,
-                         $self->{latest_rev});
+    my $guid_id = $self->_file_guid_id($path);
 
-    return { guid_id => $guid->{id}, action => 'A' };
+    my $changes = $self->{changes};
+    if (exists $changes->{$guid_id}) {
+        # The file has been deleted and then re-added, which we treat as
+        # being a modification with a change to the path.
+        my $change = $changes->{$guid_id};
+        assert($change->{_status} eq 'D') if DEBUG;
+        $change->{_status} = 'M';
+        $change->{_path} = undef;
+    }
+    else {
+        $changes->{$guid_id} = { _status => 'A' };
+    }
+
+    return $changes->{$guid_id};
 }
 
 *add_directory = *add_file;
@@ -159,9 +140,12 @@ sub open_file
 
     assert($branch_path eq substr($path, 0, length($branch_path))) if DEBUG;
     $path = substr($path, length($branch_path) + 1);
-    my $guid = file_guid($self->{db}, $self->{branch_id}, $path,
-                         $self->{latest_rev});
-    return { guid_id => $guid->{id} };
+    my $guid_id = $self->_file_guid_id($path);
+
+    my $changes = $self->{changes};
+    assert(!exists $changes->{$guid_id}) if DEBUG;
+
+    return $changes->{$guid_id} = {};
 }
 
 *open_directory = *open_file;
@@ -175,7 +159,14 @@ sub change_file_prop
     # they don't represent changes that should affect what gets republished.
     return if $name =~ /^svn:entry:/;
 
-    $baton->{props}{$name} = defined $value ? 'M' : 'D';
+    # Ignore properties with names which start with '_' because they might
+    # interfere with the special values we keep in the same hash.  You can
+    # still have them in your content, just not use them to decide what
+    # publishing work to do.
+    return if $name =~ /^_/;
+
+    $baton->{_status} = 'M' unless exists $baton->{_status};
+    $baton->{$name} = undef;
 }
 
 *change_dir_prop = *change_file_prop;
@@ -188,42 +179,24 @@ sub absent_file
 
 *absent_directory = *absent_file;
 
-sub close_file
-{
-    my ($self, $baton) = @_;
-    return unless defined $baton;
-    return unless defined $baton->{action} || exists $baton->{props};
-
-    my $db = $self->{db};
-    my $job_id = $self->{job_id};
-    my $guid_id = $baton->{guid_id};
-    my $action = defined $baton->{action} ? $baton->{action} : 'P';
-
-    _add_file_change($db, $job_id, $guid_id, $action);
-
-    while (my ($name, $action) = each %{$baton->{props}}) {
-        db_insert($db, 'job_property',
-            job_id => $job_id,
-            guid_id => $guid_id,
-            name => $name,
-            action => $action,
-        );
-    }
-}
+sub close_file { }
 
 *close_directory = *close_file;
 
 sub apply_textdelta
 {
     my ($self, $baton) = @_;
-    assert(defined $baton) if DEBUG;
+    return unless defined $baton;
 
-    if (defined $baton->{action}) {
-        assert($baton->{action} eq 'A') if DEBUG;
-    }
-    else {
-        $baton->{action} = 'M';
-    }
+    $baton->{_status} = 'M' unless exists $baton->{_status};
+    assert($baton->{_status} ne 'D') if DEBUG;
+
+    # The content may have changed, but we can't be sure without until
+    # we later compare the content in the start and end revisions, after
+    # the editor has finished.  This just indicates we should check.
+    $baton->{_content_maybe} = undef;
+
+    return;         # no need to actually apply the delta
 }
 
 sub abort_edit
@@ -231,6 +204,25 @@ sub abort_edit
     my ($self, $pool) = @_;
     # TODO
     print STDERR "abort_edit: self=$self, pool=$pool;\n";
+}
+
+# This is similar to Daizu::Revision::file_guid() except that:
+#  * the revision we look in is always end_rev
+#  * there's no need to do a join, because we only need the guid_id value
+#  * the GUID is expected to exist
+sub _file_guid_id
+{
+    my ($self, $path) = @_;
+    my ($guid_id) = $self->{db}->selectrow_array(q{
+        select guid_id
+        from file_path
+        where branch_id = ?
+          and path = ?
+          and first_revnum <= ?
+          and (last_revnum is null or last_revnum >= ?)
+    }, undef, $self->{branch_id}, $path, $self->{end_rev}, $self->{end_rev});
+    assert(defined $guid_id) if DEBUG;
+    return $guid_id;
 }
 
 =head1 COPYRIGHT

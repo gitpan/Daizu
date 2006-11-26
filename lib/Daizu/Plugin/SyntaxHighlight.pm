@@ -93,7 +93,7 @@ The Daizu CMS default stylesheet has these rules included already.
 =item Daizu::Plugin::SyntaxHighlight-E<gt>register($cms, $whole_config, $plugin_config, $path)
 
 Called by Daizu CMS when the plugin is registered.  It registers the
-L<do_syntax_highlighting()|/$self-E<gt>do_syntax_highlighting($cms, $doc)>
+L<do_syntax_highlighting()|/$self-E<gt>do_syntax_highlighting($cms, $file, $doc)>
 method as an HTML DOM filter.
 
 The configuration is currently ignored.
@@ -107,7 +107,7 @@ sub register
     $cms->add_html_dom_filter($path, $self => 'do_syntax_highlighting');
 }
 
-=item $self-E<gt>do_syntax_highlighting($cms, $doc)
+=item $self-E<gt>do_syntax_highlighting($cms, $file, $doc)
 
 Does the actual filtering in-place on C<$doc> and returns it.
 Currently C<$cms> is ignored.
@@ -116,7 +116,7 @@ Currently C<$cms> is ignored.
 
 sub do_syntax_highlighting
 {
-    my (undef, undef, $doc) = @_;
+    my (undef, undef, undef, $doc) = @_;
 
     for my $elem ($doc->findnodes(qq{
         //*[namespace-uri() = '$Daizu::HTML_EXTENSION_NS' and
@@ -147,7 +147,7 @@ sub do_syntax_highlighting
 
         my $new_elem = $doc->createElementNS('http://www.w3.org/1999/xhtml',
                                              $output_elem_name);
-        $new_elem->setAttribute(class => 'SyntaxHighlight');
+        $new_elem->setAttribute(class => 'syntax-highlight');
         for (@{$marked}) {
             my ($class, $text) = @$_;
             $text = XML::LibXML::Text->new($text);
@@ -166,7 +166,7 @@ sub do_syntax_highlighting
         $elem->replaceNode($new_elem);
     }
 
-    return $doc;
+    return { content => $doc };
 }
 
 =back

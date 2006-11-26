@@ -245,53 +245,18 @@ create table url (
     status char(1) not null
         -- Active, Redirect, Gone
         check (status in ('A', 'R', 'G')),
+
+    -- If the status is 'R' then this indicates which entry in the 'url'
+    -- table this one should redirect to.  The target URL may be gone, but
+    -- it should not be another redirect.
     redirect_to_id int references url,
     constraint url_redirect_missing_chk
         check ((status = 'R') = (redirect_to_id is not null))
 );
-create index url_unique_idx on url (url, wc_id);
+create unique index url_unique_idx on url (url, wc_id);
 
 create table live_revision (
     revnum int not null references revision
-);
-
- -- Each publishing job represents the changes made to files and directories
- -- in the live WC's branch, from start_rev to end_rev.  The process of
- -- generating any output to bring the live site up to date must be completed
- -- while the live WC is still at revision 'end_rev', otherwise the job must
- -- be considered out of date and abandoned.
-create table publish_job (
-    id serial primary key,
-    start_rev int references revision,  -- null if starting from beginning
-    end_rev int not null references revision,
-    created_at timestamp not null
-);
-
- -- Each GUID listed here has some change.  Either it was added, deleted,
- -- or modified (changes to one or more of its content, properties, or path).
-create table job_file (
-    job_id int not null references publish_job on delete cascade,
-    guid_id int not null references file_guid,
-    action char(1)
-        -- A=add, D=delete, M=modify
-        -- null=just property changes or path change
-        -- '?' is only allowed while a job is being created, and means that
-        -- a path change has made it impossible to tell just from the update
-        -- what other changes have been made.
-        check (action in ('A', 'D', 'M', '?')),
-    path_changed boolean not null default false,
-    primary key (job_id, guid_id)
-);
-
-create table job_property (
-    job_id int not null references publish_job on delete cascade,
-    guid_id int not null references file_guid,
-    name text not null
-        check (name <> ''),
-    action char(1) not null
-        -- M=modified or added, D=deleted
-        check (action in ('M', 'D')),
-    primary key (job_id, guid_id, name)
 );
 
  -- TODO - allow for a seperate Latin transliterated name, e.g. for Chinese

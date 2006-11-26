@@ -13,12 +13,13 @@ our @EXPORT_OK = qw(
 use utf8;
 use HTML::Parser ();
 use URI;
+use Daizu::File;
 use Daizu::HTML qw(
     html_escape_attr
 );
 use Daizu::Util qw(
     url_encode
-    db_row_exists
+    db_row_exists db_row_id db_select
 );
 
 =head1 NAME
@@ -60,6 +61,12 @@ our %PREVIEW_FILTER = (
     'text/html' => \&adjust_preview_links_html,
     'application/xhtml+xml' => \&adjust_preview_links_html,
     'text/css' => \&adjust_preview_links_css,
+);
+
+# TODO document, and provide some way to configure this.
+our %ENABLE_SSI = (
+    'text/html' => undef,
+    'application/xhtml+xml' => undef,
 );
 
 =item %HTML_URL_ATTR
@@ -238,6 +245,11 @@ sub adjust_preview_links_html
     my ($cms, $wc_id, $base_url, $html, $fh) = @_;
     $base_url = URI->new($base_url);
 
+    # TODO - SSI processing should be optional, probably off by default.
+    # TODO - this should be done in output_preview, for the right MIME types,
+    # whether or not there's a preview function for them.
+    _process_ssi($cms, $wc_id, $base_url, \$html);
+
     # When in <style> elements filter CSS to adjust links.
     my $in_style = 0;
 
@@ -290,6 +302,97 @@ sub _start_h
     } sort keys %$attr;
 
     print $fh ($attrtext ? "<$tagname $attrtext>" : "<$tagname>");
+}
+
+sub _process_ssi
+{
+    my ($cms, $wc_id, $base_url, $html) = @_;
+    my $output = '';
+
+    LOOP: {
+        # TODO - recognize other SSI directives and signal error
+        if ($$html =~ m{\G<!--\#include \s+
+                                virtual \s* = \s* ( "[^"]*" |
+                                                    '[^']*' |
+                                                    `[^`]*` )
+                        \s+ -->}cgx)
+        {
+            my $url = $1;
+            $url =~ s/\A"(.*)"\z/$1/ or
+                    s/\A'(.*)'\z/$1/ or
+                    s/\A`(.*)`\z/$1/;
+            $url = URI->new($url);
+            $output .= "[SSI error: only path allowed]", redo LOOP
+                if $url->scheme;
+            $url = $url->abs($base_url);
+            my ($type, $fragment) = _load_ssi($cms, $wc_id, $url);
+            $output .= "[SSI error: $fragment]", redo LOOP
+                unless defined $type;
+            _process_ssi($cms, $wc_id, $url, $fragment)
+                if exists $ENABLE_SSI{$type};
+            $output .= $$fragment;
+            redo LOOP;
+        }
+        elsif ($$html =~ /\G([^<]+)/cg || $$html =~ /\G(.)/cgs) {
+            $output .= $1;
+            redo LOOP;
+        }
+    }
+
+    $$html = $output;
+}
+
+# Returns either:
+#   MIME type and reference to content - if URL is active
+#   undef and error string - if URL is not active
+sub _load_ssi
+{
+    my ($cms, $wc_id, $url) = @_;
+    my $db = $cms->db;
+
+    my ($guid_id, $gen_class, $method, $argument, $type, $status) =
+        db_select($db,
+            url => { wc_id => $wc_id, url => $url },
+            qw( guid_id generator method argument content_type status ),
+        );
+
+    return (undef, 'URL not found in working copy')
+        unless defined $guid_id;
+    return (undef, 'URL no longer exists')
+        if $status eq 'G';
+    return (undef, 'URL is a redirect')     # might still work, but warn anyway
+        if $status eq 'R';
+
+    my ($file_id) = db_row_id($db, 'wc_file',
+        wc_id => $wc_id, guid_id => $guid_id,
+    );
+    return (undef, 'URL marked active, but content no longer available')
+        unless defined $file_id;
+    my $file = Daizu::File->new($cms, $file_id);
+
+    my $generator = $file->generator;
+    die "generator '$gen_class' for '$url' is missing method '$method'\n"
+        unless $generator->can($method);
+
+    $type = 'application/octet-stream'  # TODO: should be configured somewhere
+        unless defined $type;
+
+    my $data = '';
+    open my $fh, '>', \$data
+        or die "error creating memory file handle: $!";
+    my $url_info = {
+        url => $url,
+        method => $method,
+        argument => $argument,
+        type => $type,
+        fh => $fh,
+    };
+    $generator->$method($file, [ $url_info ]);
+    if (defined $url_info->{fh}) {
+        close $fh or die $!;
+    }
+
+    return ($type, \$data);
 }
 
 =item adjust_preview_links_css($cms, $wc_id, $base_url, $css, $fh)

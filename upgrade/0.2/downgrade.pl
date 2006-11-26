@@ -4,7 +4,7 @@ use strict;
 
 =head1 NAME
 
-downgrade-0.2-0.1.pl - downgrade the database for a S<Daizu 0.2> installation to work with S<Daizu 0.1>
+downgrade.pl - downgrade the database for a S<Daizu 0.2> installation to work with S<Daizu 0.1>
 
 =head1 DESCRIPTION
 

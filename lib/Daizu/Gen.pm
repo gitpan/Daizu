@@ -17,7 +17,7 @@ use Daizu::HTML qw(
 use Daizu::Util qw(
     trim like_escape pgregex_escape
     w3c_datetime parse_db_datetime
-    db_select
+    db_row_id db_select
     add_xml_elem xml_attr
     daizu_data_dir
 );
@@ -33,10 +33,18 @@ URLs should be created (generated) from each file or directory in a
 working copy, and generating the output which will be served for those
 URLs.  This class itself is used by default, but you can use a
 different generator class by setting the C<daizu:generator> property
-to the name of a Perl module and class.  If you set it on a file,
+to the name of a Perl class.  If you set it on a file,
 it will affect only that file.  If you set it on a directory then it
 will affect that directory and all its descendants, unless they themselves
 have a C<daizu:generator> property.
+
+The name of the generator class used for each file and directory is
+stored in the C<generator> column of the C<wc_file> table in the
+database.
+
+When an object of a generator class is instantiated, it must be given
+a 'root file', which is the file on which the C<daizu:generator> property
+was set (or a top-level file or directory, if no such property applies).
 
 This class creates URLs based on the C<daizu:url> property, and the
 names of files and directories.  The results will be similar to the
@@ -47,32 +55,88 @@ not appear as part of the URL.  Instead the URL will end with a trailing
 slash (C</>).
 
 With this generator class only files generate URLs.  Directories are
-ignored, except when a Google sitemap is configured as described below.
-
-TODO - provide a whole section giving guidance on subclassing this.
-Include an example of a C<*_urls_info()> override which calls its
-superclass version, like C<root_dir_urls_info()> in L<Daizu::Gen::Blog>.
+ignored, except when a sitemap XML file is configured as described below.
 
 =head1 CONFIGURATION
 
 The only configuration information which this generator currently makes use
-of is the C<google-sitemap> element shown here:
+of is the C<xml-sitemap> element shown here:
 
 =for syntax-highlight xml
 
     <config path="example.com">
      <generator class="Daizu::Gen">
-      <google-sitemap />
+      <xml-sitemap />
      </generator>
     </config>
 
 The sitemap URL will be generated from the directory at the path indicated.
 It must be a directory, not a plain file.  In this case, the sitemap is
 likely to have a URL like C<http://example.com/sitemap.xml.gz>.
+You can give this URL to Google, or any other search engine which supports
+the sitemaps format, to help their robots find URLs on your website.
 
-The C<google-sitemap> element may an optional C<url> attribute, which
+The C<xml-sitemap> element may an optional C<url> attribute, which
 should be a relative or absolute URL at which to publish the sitemap file.
 Its default value is I<sitemap.xml.gz>
+
+=head1 SUBCLASSING
+
+To write your own generator class, inherit from this one and override some
+of the following methods:
+
+=over
+
+=item L<custom_base_url|/$gen-E<gt>custom_base_url($file)>
+
+If you want to modify the basic URL scheme then you might want to provide
+your own algorithm for deciding what URLs to use.  You could instead override
+C<base_url> itself, but usually it's best to leave that alone.  It will handle
+things like URLs explicitly set with the C<daizu:url> property, and ignoring
+things in I<_hide> directories, and just call your C<custom_base_url> method
+for the rest.
+
+=item L<custom_urls_info|/$gen-E<gt>custom_urls_info($file)>
+
+You would only need to override this if you want to make fairly big changes
+to the URL scheme.  If you just want to change the URLs of a particular type
+of file then you might be able to do that by overriding one of the simpler
+C<*_urls_info> functions listed next.  The base-class implementation of
+this function just chooses between.
+
+You almost certainly don't want to override
+L<urls_info|/$gen-E<gt>urls_info($file)>, since that's just a wrapper around
+this function which tidies up the results.
+
+=item L<article_urls_info|/$gen-E<gt>article_urls_info($file)>, L<unprocessed_urls_info|/$gen-E<gt>unprocessed_urls_info($file)>, L<dir_urls_info|/$gen-E<gt>dir_urls_info($file)>, L<root_dir_urls_info|/$gen-E<gt>root_dir_urls_info($file)>
+
+Override one or more of these to change which URLs are produced for
+particular types of files, such as articles or directories.  For example
+the blog generator overrides C<root_dir_urls_info> to add URLs for the blog
+homepage, feeds, etc.
+
+=item L<article_template_overrides|/$gen-E<gt>article_template_overrides($file, $url_info)>, L<article_template_variables|/$gen-E<gt>article_template_variables($file, $url_info)>
+
+These are called by the L<article|/$gen-E<gt>article($file, $urls)> method.
+The base-class ones don't do anything, but you can override them to provide
+extra information to the templates or to replace a standard template with
+a different one (if you want to change one aspect of the page structure
+for your articles).  Doing this should allow you to avoid writing your own
+C<article> generator method.
+
+=item L<navigation_menu|/$gen-E<gt>navigation_menu($file, $url)>
+
+Override this to change the menu items which will be displayed by the
+I<nav_menu.tt> template.  Of course if you want to provide a radically
+different kind of navigation then you may need to rewrite that template
+to a different one.  If you do that, it's probably a good idea to override
+this method with one that does no work, to avoid generating menu items
+which won't be used.
+
+=back
+
+The constructor can accept additional options, and will just store them
+in the object hash, so you probably won't need to override that.
 
 =head1 METHODS
 
@@ -408,10 +472,10 @@ Return a list of URLs for the directory C<$file>, which should
 be a L<Daizu::File> object for the root directory of the generator
 (the directory which has the C<daizu:generator> property or a
 top-level directory).  This base-class implementation returns no
-URLs unless the configuration specifies that a Google sitemap should
+URLs unless the configuration specifies that an XML sitemap should
 be published, in which case it returns a single URL for the sitemap
 file, using the
-L<google_sitemap() method|/$gen-E<gt>google_sitemap($file, $urls)>.
+L<xml_sitemap() method|/$gen-E<gt>xml_sitemap($file, $urls)>.
 
 If a file, rather than a directory, has a C<daizu:generator> property,
 then this method isn't called and the file isn't distinguished
@@ -419,6 +483,23 @@ in any way for being the 'root file'.
 
 The return value is as specified for
 L<custom_urls_info()|/$gen-E<gt>custom_urls_info($file)>.
+
+If you override this to add other URLs you can still allow sitemaps
+to be published from the root directory by calling the superclass
+version, like this:
+
+=for syntax-highlight perl
+
+    sub root_dir_urls_info
+    {
+        my ($self, $file) = @_;
+        my @url = $self->SUPER::root_dir_urls_info($file);
+
+        # Add your own URLs here:
+        push @url, { ... };
+
+        return @url;
+    }
 
 =cut
 
@@ -430,11 +511,11 @@ sub root_dir_urls_info
     return unless defined $conf;
 
     my ($elem, $extra) = $conf->getChildrenByTagNameNS($Daizu::CONFIG_NS,
-                                                       'google-sitemap');
+                                                       'xml-sitemap');
     return unless defined $elem;
 
     my $config_filename = $self->{cms}{config_filename};
-    die "$config_filename: only one Google sitemap allowed on $file->{path}"
+    die "$config_filename: only one XML sitemap allowed on $file->{path}"
         if defined $extra;
 
     my $url = trim(xml_attr($config_filename, $elem, 'url',
@@ -442,7 +523,7 @@ sub root_dir_urls_info
 
     return {
         url => $url,
-        method => 'google_sitemap',
+        method => 'xml_sitemap',
         type => 'application/xml',
     };
 }
@@ -491,6 +572,18 @@ sub generate_web_page
         RECURSION => 1,
     }) or die $Template::ERROR;
 
+    if (exists $vars->{head_links}) {
+        for my $rel (qw( prev next )) {
+            next if exists $vars->{"head_links_$rel"};
+            for (@{$vars->{head_links}}) {
+                next unless $_->{rel} eq $rel;
+                $vars->{"head_links_$rel"} = $_
+                    if defined $_->{title};
+                last;
+            }
+        }
+    }
+
     $tt->process('page.tt', {
         cms => $cms,
         file => $file,
@@ -527,7 +620,307 @@ The base-class implementation returns an empty hash reference.
 
 =cut
 
-sub article_template_variables { {} }
+sub article_template_variables
+{
+    my ($self, $file, $url_info) = @_;
+    my @meta;
+
+    my $desc = $file->description;
+    push @meta, { name => 'description', content => $desc }
+        if defined $desc;
+
+    my $tags = $file->tags;
+    if (@$tags) {
+        push @meta, {
+            name => 'keywords',
+            content => join(', ', map { $_->{original_spelling} } @$tags),
+        };
+    }
+
+    return @meta ? { head_meta => \@meta } : {};
+}
+
+=item $gen-E<gt>url_updates_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)
+
+This is called by the publishing code in L<Daizu::Publish> when a file has
+been changed.  It should return a reference to an array of GUID IDs for
+files which should have their own URLs updated.  The URLs for the file
+which has changed are always updated anyway.
+
+This is used in the L<Daizu::Gen::Blog> generator, for example, to ensure
+that new URLs appear for archive pages the first time a new article is
+published in a given month.
+
+C<$status> will be C<A> when a new file has been added to the content
+repository, C<M> when an existing file has been modified in some way,
+and C<D> when it has been deleted.  If the status is C<D> then the live
+working copy will no longer have information about this file, so C<$file_id>
+will be undef, and this method will be called on a generator object with
+a 'fake' root file (so don't expect to be able to do anything with the
+C<root_file> value in the generator object).
+
+Note that there must always be an array reference returned, even if
+it's an empty array.
+
+C<$changes> will be a reference to a hash containing various keys with
+information about the changes that were made to the file since the last
+time the sites were updated.  Most keys are the names of Subversion properties
+which have been changed.  The values for those will be the I<old> value of
+the property.  Unless a file has been deleted, the new values can be looked
+up in the live working copy.  For files which have been added, the property
+values supplied will all be undef, since there were no old values.
+
+There are also some values in the C<$changes> hash with special names.
+These all start with underscores.  (If there are any real properties whose
+names start with underscore, changes to them won't be registered.)
+The following special values are available:
+
+=over
+
+=item C<_status>
+
+Same as C<$status>.
+
+=item C<_new_issued>
+
+A L<DateTime> value, containing the publication time of the file in its
+new state.  Will only be present for files which have been newly added
+or modified files for which the value has changed.  The value will be
+based on either the C<dcterms:issued> property or the time at which the
+file was first committed.
+
+=item C<_old_issued>
+
+Same as C<_new_issued>, except that it refers to the publication time
+before the changes we are considering.  Available only for deleted files
+or modified files where the C<dcterms:issued> property was changed.
+
+=item C<_article_url> and C<_urls>
+
+TODO - these aren't implemented yet
+
+An entry for C<_urls> is present (with a value which is always undef) if
+any of the URLs for the file have been changed.  The same applies to
+C<_article_url> except that it is only present if the URL for the first
+page of an article URL has been changed (one with a method of C<article>
+and no argument).
+
+=item C<_old_article> and C<_new_article>
+
+These keys are always present, no matter what value C<$status> has.
+The value is either C<0> or C<1>, to indicate false or true respectively.
+They are true only if the article was or now is an article.
+
+=item C<_old_path> and C<_new_path>
+
+The full path of the file in Daizu working copies before and after
+the changes.  If the file has been added or deleted then only one of
+these will be present.
+
+=item C<_content>
+
+TODO - this may be removed in the future for performance reasons,
+and some other way of getting the information provided.
+
+=back
+
+This method is called before any URL updating has actually been done,
+even for the file it is called for.
+
+This particular implementation of the method forces URL updates when
+the file has had its C<daizu:url> or C<daizu:generator> properties changed.
+
+=cut
+
+# If current file has its daizu:url changed, update this one and all its
+# descendants unless they have their own daizu:url now.  Same for the
+# daizu:generator property.
+sub url_updates_for_file_change
+{
+    my ($self, $wc_id, $guid_id, $file_id, $status, $changes) = @_;
+    my @update;
+
+    if ($status eq 'M') {
+        push @update,
+             _updates_for_descendants($self->{cms}{db}, $wc_id, $file_id,
+                                      'custom_url is null')
+            if exists $changes->{'daizu:url'};
+
+        push @update,
+             _updates_for_descendants($self->{cms}{db}, $wc_id, $file_id,
+                                      'root_file_id is not null')
+            if exists $changes->{'daizu:generator'};
+    }
+
+    return \@update;
+}
+
+sub _updates_for_descendants
+{
+    my ($db, $wc_id, $parent_id, $cond) = @_;
+
+    my $sth = $db->prepare(qq{
+        select id, guid_id, is_dir
+        from wc_file
+        where wc_id = ?
+          and parent_id = ?
+          and $cond
+    });
+    $sth->execute($wc_id, $parent_id);
+
+    my @update;
+    my @dir;
+    while (my ($id, $guid_id, $is_dir) = $sth->fetchrow_array) {
+        push @update, $guid_id;
+        push @dir, $id if $is_dir;
+    }
+
+    for my $dir_id (@dir) {
+        push @update, _updates_for_descendants($db, $wc_id, $dir_id, $cond);
+    }
+
+    return @update;
+}
+
+=item $gen-E<gt>publishing_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)
+
+This method is called by the publishing code when a file has been changed,
+to see if any extra URLs need to be republished to reflect the changes
+made.  All the URLs for any modified files are republished anyway.
+
+The return value should be a reference to an array of URLs (either as
+strings or L<URI> objects) which Daizu knows how to publish.  It should
+always return an array reference even if it's empty.
+
+C<$changes> is a reference to a hash, in the same format as for the
+L<url_updates_for_file_change() method|/$gen-E<gt>url_updates_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)>.
+
+This method is called after the URLs for all modified files have been
+updated, but before any publication takes place.
+
+This particular implementation publishes files which may reference the
+changed file in their navigation menu, if the file's title, short-title,
+or URL have been changed.  It won't always get every file which could be
+affected though.
+
+=cut
+
+sub publishing_for_file_change
+{
+    my ($self, $wc_id, $guid_id, $file_id, $status, $changes) = @_;
+    my $db = $self->{cms}{db};
+    my @publish;
+
+    # Non-article files don't affect the menu, except for when the
+    # 'daizu:nav-menu' property is changed on an article's parent directory,
+    # which we currently don't bother to deal with.
+    return [] unless $changes->{_new_article} || $changes->{_old_article};
+
+    # I'm not sure how we figure out what to do when a file has been
+    # deleted.  Look at the 'gone' URLs I suppose.  For now ignore it.
+    return [] if $status eq 'D';
+
+    # Only do anything if something has changed which may affect the
+    # navigation menus on other articles.  If it has we republish the
+    # parent URL (by taking the last path component off), since that will
+    # almost certainly reference this page in its navigation menu.  We
+    # also republish siblings and children of this URL, which are likely to
+    # reference it.  We should really do all pages below this in the hierarchy,
+    # but that's an edge case because you won't often change the title of
+    # an article after it has had time to grow a deep hierarchy.
+    if ($status eq 'A' ||
+        $changes->{_new_article} != $changes->{_old_article} ||
+        ($status eq 'M' && (exists $changes->{'dc:title'} ||
+                            exists $changes->{'daizu:short-title'} ||
+                            exists $changes->{_article_url})))
+    {
+        # Add children of current article's URL.
+        my ($url) = db_select($db, wc_file => $file_id, 'article_pages_url');
+        _add_url_children($db, $wc_id, $url, \@publish);
+
+        # Add siblings.
+        my $parent_url = URI->new($url);
+        my $path = $parent_url->path;
+        $path =~ s{[^/]+/?\z}{};        # take off last path component
+        $parent_url->path($path);
+        if ($parent_url =~ m!/$! && !$parent_url->eq($url)) {
+            push @publish, $parent_url;
+            _add_url_children($db, $wc_id, $parent_url, \@publish);
+        }
+    }
+
+    return \@publish;
+}
+
+sub _add_url_children
+{
+    my ($db, $wc_id, $url, $publish) = @_;
+
+    my $sth = $db->prepare(q{
+        select article_pages_url
+        from wc_file
+        where wc_id = ?
+          and article_pages_url ~ ('^' || ? || '[^/]+/?$')
+          and article
+          and not retired
+    });
+    $sth->execute($wc_id, pgregex_escape($url));
+
+    while (my ($guid_id) = $sth->fetchrow_array) {
+        push @$publish, $guid_id;
+    }
+}
+
+=item $gen-E<gt>publishing_for_url_change($wc_id, $status, $old_url_info, $new_url_info)
+
+This is called by the publishing code when a URL has been changed.
+It should indicate any URLs which need publishing in addition to
+the ones which have actually changed.
+
+The return value should be a reference to an array of URLs (either as
+strings or L<URI> objects) which Daizu knows how to publish.  It should
+always return an array reference even if it's empty.
+
+The values of C<$old_url_info> and C<$new_url_info> will be either
+undef (if not available) or a reference to a URL info hash, including
+the actual URL as a L<URI> object in the C<url> key.
+
+This method will be called on the generator specified for the new
+URL, except when an old URL has been deactivated.
+
+The value of C<$status> will be one of the following:
+
+=over
+
+=item C<A> for 'activated'
+
+A new URL has appeared which wasn't previously published.  In this case
+the new URL's information will be supplied, and there will be no old
+URL info.
+
+=item C<M> for 'modified'
+
+A URL has been changed (as in, Daizu thinks that what was previously
+available at the old URL is now being published at the new one).
+In this case Daizu will generate a redirect.  It will supply both the
+previous and new URL information to this method.
+
+=item C<D> for 'deactivated'
+
+A URL which previously had content published by Daizu is no longer
+generated.  Daizu will delete its content.  The old URL information
+will be passed in, but obviously there isn't any new information.
+
+=back
+
+This method is called after the URLs for all modified files have been
+updated, but before any publication takes place.
+
+This base-class implementation always returns an empty array.
+
+=cut
+
+sub publishing_for_url_change { [] }
 
 =item $gen-E<gt>article($file, $urls)
 
@@ -573,23 +966,23 @@ sub unprocessed
     }
 }
 
-=item $gen-E<gt>google_sitemap($file, $urls)
+=item $gen-E<gt>xml_sitemap($file, $urls)
 
-A standard generator method which generates a Google sitemap
+A standard generator method which generates a XML sitemap
 file, gzip compressed.
 
-The XML namespace URL used in Google sitemaps is available in the variable
+The XML namespace URL used in XML sitemaps is available in the variable
 C<$Daizu::Gen::SITEMAP_NS>.
 
-The format of Google sitemaps is documented here:
+The format of XML sitemaps is documented here:
 
-L<http://www.google.com/webmasters/sitemaps/docs/en/protocol.html>
+L<http://www.sitemaps.org/protocol.html>
 
 =cut
 
-our $SITEMAP_NS = 'http://www.google.com/schemas/sitemap/0.84';
+our $SITEMAP_NS = 'http://www.sitemaps.org/schemas/sitemap/0.9';
 
-sub google_sitemap
+sub xml_sitemap
 {
     my ($self, $file, $urls) = @_;
     my $db = $self->{cms}{db};
@@ -644,22 +1037,37 @@ sub google_sitemap
 
 A standard generator method which generates a scaled version of an image
 file.  C<$file> must represent an image in a format which can be understood
-by L<Image::Magick>.
+by L<Image::Magick>, unless the GUID ID value is included in the argument,
+in which case there must be a file with that GUID ID in the working copy which
+is of an appropriate type.
 
-The argument should consist of two numbers, the desired width and height
-of the resulting image, separated by a single space.
+The argument should consist of two or three numbers: the desired width and
+height of the resulting image, and optionally the GUID ID of the image file
+if it isn't the file the URL is actually generated from.  These should be
+separated by single spaces.
 
 =cut
 
 sub scaled_image
 {
     my ($self, $file, $urls) = @_;
-    my $data = $file->data;
 
     for my $url (@$urls) {
         die "bad argument '$url->{argument}' for scaled_image URL"
-            unless $url->{argument} =~ /^(\d+) (\d+)$/;
-        my ($width, $height) = ($1, $2);
+            unless $url->{argument} =~ /^(\d+) (\d+)(?: (\d+))?$/;
+        my ($width, $height, $img_guid_id) = ($1, $2, $3);
+
+        my $img_file = $file;
+        if (defined $img_guid_id) {
+            my $img_file_id = db_row_id($self->{cms}{db}, 'wc_file',
+                wc_id => $file->{wc_id},
+                guid_id => $img_guid_id,
+            );
+            die "image file with GUID ID $img_guid_id not in working copy"
+                unless defined $img_file_id;
+            $img_file = Daizu::File->new($self->{cms}, $img_file_id);
+        }
+        my $data = $img_file->data;
 
         require Image::Magick;
         my $img = Image::Magick->new;

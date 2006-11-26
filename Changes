@@ -1,3 +1,112 @@
+0.3     2006-11-26      r656
+
+ * Allow Perl modules to be loaded from the '_lib' directory in the
+   content repository.  r557
+
+ * Publishing feature to bring live sites up to date:
+    - Do publishing work automatically, and change the 'daizu' commands
+      for publishing in different ways to be easier to understand.  r612
+    - Methods in generators to figure out what additional publishing
+      work to do.  r575, r587, r588, r589, r591, r597, r599, r600, r618
+    - Track changes to URLs.  r596, r638
+    - Track changes to content.  r597, r598, r600, r613
+    - Output files are atomically moved into place, and old ones are only
+      overwritten if the content has changed, to preserve modification
+      times.  r614, r615
+    - Output files now have the execute permission if the file in the
+      content repository is marked as executable.  r593
+
+ * Allow connection to remote content repository with 'svn:' URL.
+   r626, r630, r639, r643
+
+ * Plugin changes:
+    - Daizu::Plugin::PictureArticle correctly encodes 'alt'.  r620
+    - PictureArticle output is prettier and more accessible.  r606
+    - Articles are reloaded if any properties change, because plugins
+      might depend on their values.  r622
+    - Daizu::Plugin::HeaderAnchor, various small bug fixes.  r635
+
+ * New plugins:
+    - Article filter plugins can now add information as well as modifying
+      the content.  r577, r640
+    - Daizu::Plugin::DisplayPicture.  r577, r620, r628, r646
+    - Daizu::Plugin::ImageMetadata.  r631, r636
+    - Daizu::Plugin::RelatedLinks.  r640
+
+ * Blog generator:
+    - Refactoring to make it easier to subclass.  r569
+    - Correctly ignore blog articles hidden in '_hide' directories.  r562
+    - Number of articles shown on the homepage is configurable.  r590
+
+ * Correct use of 'xml:base' in blog feeds.  This fixes relative links and
+   images in blog articles, at least for Bloglines and Google Reader.  See
+   http://www.daizucms.org/blog/2006/10/xml-base/ for details.  r605, r624
+
+ * Google sitemaps:
+    - Use the new XML namespace.  r629
+    - Rename URL method and configuration element to 'xml_sitemap'
+      and 'xml-sitemap' respectively, since they are no longer
+      specific to Google.  r650
+
+ * Do simple SSI processing when previewing output, in case your templates
+   use SSIs to implement part of the site design.  r560
+
+ * Article loading:
+    - Preserve comments in loaded article content.  r567
+    - Don't save unnecessary XML and DOCTYPE declarations.  r633
+
+ * Fix a bug which caused a database constraint breakage sometimes when
+   an active URL changes from one file to another.  Preserve redirects
+   where the target URL is 'gone' in case it comes back.  r581, r596
+
+ * Bug fix for 'url-content' command.  r558
+
+ * Fix UTF-8 encoding bug in preview script.  r568
+
+ * Work around bug in Encode module in Perl 5.8.4.  r627
+
+ * Make the 'update-all-articles' command work if no working copy ID
+   is specified.  r632
+
+ * Avoid unnecessary dependencies on other CPAN modules:
+    - Data::Validate::URI is no longer required (but the same checks are
+      done internally now).  r571
+    - IO::Scalar wasn't being used anyway.  r585
+
+ * Don't unnecessarily use a temporary file when parsing XHTML.  r564
+
+ * Rewrite maps:
+    - Fix bug affecting content of the map files.  r579
+    - Factor out the code for generating them.  r583
+    - Make it an error to use the same map filename more than once.  r595
+
+ * Template and style changes:
+    - Fix layout problem in IE 6.  r578
+    - Navigation menu is more flexible about which of 'title' and
+      'short title' are available.  r561
+    - Show a link to the homepage of a blog in its navigation menu.  r563
+    - The links in the <head> of blog pages are now generated using the
+      standard 'head/meta.tt' template, and they are passed to it in a
+      more flexible format.  Blog pages which aren't articles no longer
+      have bad previous or next links in.  r566
+    - New (by default empty) template for adding extra HTML at the end
+      of the file, like Google Analytics code.  r594
+    - Include description and tags ('keywords') metadata in <meta>
+      elements in the output.  r602, r611
+    - Only one set of next/previous links need to be provided on blog
+      articles.  r607
+    - Data tables in articles are centered, and table captions are styled
+      better.  r608
+
+ * Upgrade and downgrade scripts:
+    - All now stored under the 'upgrade' directory.  r603, r609
+    - The new upgrade script removes some unnecessary tables, and fixes
+      an index.  r604, r619
+ 
+
+   http://www.daizucms.org/blog/2006/11/release-0.3/
+
+
 0.2     2006-10-03      r554
 
  * Test suite:
@@ -104,7 +213,7 @@
  * Previewing no longer tries to do UTF-8 decoding and encoding, so it
    should work with content in ISO-8859-* and some other encodings.  r516
 
- * Optimize 'db_selectcol' by using 'selectcol_arrayref' rather than
+ * Optimize 'db_select_col' by using 'selectcol_arrayref' rather than
    looping through all the results from the query myself.  r546, r547
 
  * Changes in terminology:

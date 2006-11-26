@@ -8,5 +8,6 @@
  </head>
  <body>
   [% INCLUDE page_layout.tt %]
+  [% INCLUDE body_bottom.tt %]
  </body>
 </html>

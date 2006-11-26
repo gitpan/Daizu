@@ -18,7 +18,7 @@ use Daizu::Util qw(
     like_escape
     validate_uri db_datetime
     db_row_exists db_select db_insert db_update transactionally
-    mint_guid
+    mint_guid get_subversion_properties
 );
 
 =head1 NAME
@@ -318,14 +318,15 @@ sub _add_revision
 sub _adjust_custom_uri
 {
     my ($ra, $db, $path, $revnum, $guid) = @_;
+    assert($path ne '') if DEBUG;
 
-    my $full_path = $path eq '' ? 'trunk' : "trunk/$path";
-    return unless $ra->stat($full_path, $revnum);   # not present in trunk
-    my (undef, $props) = $ra->get_file($full_path, $revnum, undef);
+    my $full_path = "trunk/$path";
+    my $props = get_subversion_properties($ra, $full_path, $revnum);
+    return unless defined $props;   # not present in trunk
 
     if (exists $props->{'daizu:guid'}) {
         my $new_uri = validate_uri($props->{'daizu:guid'});
-        croak "error in revision $revnum: invalid URI in 'daizu:guid' property on 'trunk/$path'"
+        croak "error in revision $revnum: invalid URI in 'daizu:guid' property on '$full_path'"
             unless defined $new_uri;
         $new_uri = $new_uri->canonical;
 

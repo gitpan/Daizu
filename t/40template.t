@@ -8,84 +8,17 @@ use Daizu;
 use Daizu::TTProvider;
 use Daizu::Test qw( init_tests );
 
-init_tests(80);
+init_tests(26);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
-my $db = $cms->db;
 my $wc = $cms->live_wc;
 
 my $homepage_file = $wc->file_at_path('foo.com/_index.html');
 my $docidx_file = $wc->file_at_path('foo.com/doc/_index.html');
 my $subidx_file = $wc->file_at_path('foo.com/doc/subdir/_index.html');
 my $a_file = $wc->file_at_path('foo.com/doc/subdir/a.html');
-my $blog_article_file = $wc->file_at_path('foo.com/blog/2006/fish-fingers/article-1.html');
 assert(defined $_)
-    for $homepage_file, $docidx_file, $subidx_file, $a_file,
-        $blog_article_file;
-
-
-# article_template_overrides() and article_template_variables()
-{
-    my $gen = $homepage_file->generator;
-    my ($url_info) = $gen->urls_info($homepage_file);
-    isa_ok($gen->article_template_overrides($homepage_file, $url_info), 'HASH',
-           'Daizu::Gen->article_template_overrides');
-    isa_ok($gen->article_template_variables($homepage_file, $url_info), 'HASH',
-           'Daizu::Gen->article_template_variables');
-
-    $gen = $blog_article_file->generator;
-    ($url_info) = $gen->urls_info($blog_article_file);
-    isa_ok($gen->article_template_overrides($blog_article_file, $url_info),
-           'HASH',
-           'Daizu::Gen::Blog->article_template_overrides');
-    isa_ok($gen->article_template_variables($blog_article_file, $url_info),
-           'HASH',
-           'Daizu::Gen::Blog->article_template_variables');
-}
-
-
-# Daizu::Gen->navigation_menu
-my $menu = get_nav_menu_carefully($homepage_file);
-is(scalar @$menu, 3, 'navigation_menu: homepage: children');
-test_menu_item($menu->[0], 'homepage, 0', 0, 'about.html', 'About Foo.com');
-test_menu_item($menu->[1], 'homepage, 1', 0, 'blog/', 'Foo Blog');
-test_menu_item($menu->[2], 'homepage, 2', 0, 'doc/',
-               "Title for \x{2018}doc\x{2019} index page");
-
-$menu = get_nav_menu_carefully($docidx_file);
-is(scalar @$menu, 1, 'navigation_menu: docidx: one item');
-test_menu_item($menu->[0], 'docidx, 0', 2, undef,
-               "Title for \x{2018}doc\x{2019} index page");
-test_menu_item($menu->[0]{children}[0], 'docidx, 0.0', 0,
-               'Util.html', 'Daizu::Util - various utility functions');
-test_menu_item($menu->[0]{children}[1], 'docidx, 0.1', 0,
-               'subdir/', 'Subdir index');
-
-$menu = get_nav_menu_carefully($subidx_file);
-test_menu_item($menu->[0], 'subidx, 0', 1,
-               '../', "Title for \x{2018}doc\x{2019} index page");
-test_menu_item($menu->[0]{children}[0], 'subidx, 0.0', 3,
-               undef, 'Subdir index');
-test_menu_item($menu->[0]{children}[0]{children}[0], 'subidx, 0.0.0', 0,
-               'a.html', 'First article');
-test_menu_item($menu->[0]{children}[0]{children}[1], 'subidx, 0.0.1', 0,
-               'q.html', 'Middle article');
-test_menu_item($menu->[0]{children}[0]{children}[2], 'subidx, 0.0.2', 0,
-               'z.html', 'Last article');
-
-$menu = get_nav_menu_carefully($a_file);
-test_menu_item($menu->[0], 'afile, 0', 1,
-               '../', "Title for \x{2018}doc\x{2019} index page");
-test_menu_item($menu->[0]{children}[0], 'afile, 0.0', 3,
-               './', 'Subdir index');
-test_menu_item($menu->[0]{children}[0]{children}[0], 'afile, 0.0.0', 0,
-               undef, 'First article');
-test_menu_item($menu->[0]{children}[0]{children}[1], 'afile, 0.0.1', 0,
-               'q.html', 'Middle article');
-test_menu_item($menu->[0]{children}[0]{children}[2], 'afile, 0.0.2', 0,
-               'z.html', 'Last article');
-
-# Daizu::Gen::Blog->navigation_menu - TODO
+    for $homepage_file, $docidx_file, $subidx_file, $a_file;
 
 
 # Daizu::TTProvider->_load()
@@ -155,51 +88,6 @@ test_load_template($cms, $homepage_file, 'test1.tt',
                    'Test template 2, in foo.com',
                    { 'test1.tt' => 'test2.tt' });
 
-
-sub get_nav_menu_carefully
-{
-    my ($file) = @_;
-    my $gen = $file->generator;
-    my @urls = $gen->urls_info($file);
-    assert(@urls >= 1);
-
-    my $menu = $gen->navigation_menu($file, $urls[0]);
-
-    my $num_undef_links = _nav_menu_check_children($menu);
-    assert($num_undef_links == 0 || $num_undef_links == 1);
-    return $menu;
-}
- 
-sub _nav_menu_check_children
-{
-    my ($items) = @_;
-    assert(defined $items);
-    assert(ref $items eq 'ARRAY');
-
-    my $num_undef_links = 0;
-    for my $item (@$items) {
-        assert(defined $item);
-        assert(ref $item eq 'HASH');
-        assert(defined $item->{title});
-        ++$num_undef_links unless defined $item->{link};
-        $num_undef_links += _nav_menu_check_children($item->{children});
-    }
-
-    return $num_undef_links;
-}
-
-sub test_menu_item
-{
-    my ($item, $desc, $num_children, $url, $title) = @_;
-    SKIP: {
-        skip "expected menu item doesn't exist", 3
-            unless defined $item;
-        is($item->{link}, $url, "navigation_menu: $desc: link");
-        is($item->{title}, $title, "navigation_menu: $desc: title");
-        is(scalar @{$item->{children}}, $num_children,
-           "navigation_menu: $desc: num children");
-    }
-}
 
 sub test_load_template
 {

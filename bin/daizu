@@ -10,14 +10,33 @@ daizu - command line interface to Daizu CMS
 
     export DAIZU_CONFIG=/etc/my-daizu-config.xml
 
+    # Get a working copy
     daizu checkout
+
+    # Bring it up to date with new revisions
     daizu update
 
+    # Publish any new stuff
+    daizu publish
+
+    # Load new revisions (done automatically when updating
+    # a working copy, so not normally needed)
+    daizu load-revisions
+
+    # Manually reload articles (not normally necessary)
+    daizu update-article example.com/blog/article.html
+    daizu update-all-articles
+
+    # Manual URL updates (not normally necessary)
     daizu update-urls example.com/blog
     daizu update-all-urls
 
-    daizu publish http://example.com/new-file.html
-    daizu publish-all http://example.com/
+    # Manual publishing (not normally necessary)
+    daizu publish-url http://example.com/page.html
+    daizu publish-site http://example.com/
+
+    # Publish to stdout (for testing)
+    daizu url-content http://example.com/ >homepage.html
 
 =head1 DESCRIPTION
 
@@ -38,16 +57,18 @@ The following subcommands are available:
 
 use Getopt::Std qw( getopts );
 use DateTime;
-use File::Path qw( mkpath );
-use Path::Class qw( file );
 use Carp::Assert qw( assert DEBUG );
 use Daizu;
 use Daizu::Wc;
 use Daizu::File;
-use Daizu::Publish qw( create_publishing_job );
+use Daizu::Publish qw(
+    update_live_sites
+    publish_urls
+    publish_redirect_map publish_gone_map
+);
 use Daizu::Util qw(
     like_escape
-    db_row_exists db_row_id db_select db_insert
+    db_row_exists db_row_id db_select db_insert transactionally
     instantiate_generator
     update_all_file_urls
 );
@@ -58,21 +79,20 @@ usage() unless @ARGV;
 my $command = shift @ARGV;
 
 my %COMMANDS = (
-    'load-revision' => \&cmd_load_revision,
-    checkout => \&cmd_checkout,
-    co => \&cmd_checkout,
-    update => \&cmd_update,
-    up => \&cmd_update,
-    publish => \&cmd_publish,
     #add => \&cmd_add,
     #mkdir => \&cmd_mkdir,
     #replace => \&cmd_replace,
-    'update-urls' => \&cmd_update_urls,
+    'checkout' => \&cmd_checkout,
+    'load-revisions' => \&cmd_load_revisions,
+    'publish' => \&cmd_publish,
+    'publish-site' => \&cmd_publish_site,
+    'publish-url' => \&cmd_publish_url,
+    'update' => \&cmd_update,
+    'update-all-articles' => \&cmd_update_all_articles,
     'update-all-urls' => \&cmd_update_all_urls,
     'update-article' => \&cmd_update_article,
-    'update-all-articles' => \&cmd_update_all_articles,
+    'update-urls' => \&cmd_update_urls,
     'url-content' => \&cmd_url_content,
-    'publish-all' => \&cmd_publish_all,
 );
 
 usage() unless exists $COMMANDS{$command};
@@ -81,7 +101,7 @@ my $cms = Daizu->new($opt{c});
 $COMMANDS{$command}->($cms, \%opt, @ARGV);
 
 
-=item load-revision
+=item load-revisions
 
 Load new revisions from the content repository, up to the latest revision.
 If the C<-r> option is given then it specifies a revision number to
@@ -92,7 +112,7 @@ updated, so you won't normally need to do this.
 
 =cut
 
-sub cmd_load_revision
+sub cmd_load_revisions
 {
     my ($cms, $opt) = @_;
     my $revnum = $cms->load_revision($opt{r});
@@ -138,7 +158,30 @@ sub cmd_update
     print "Updated working copy ", $wc->id, " to revision $new_revnum\n";
 }
 
-=item publish url [wc-id]
+=item publish
+
+Bring the live website (or sites) up to date with the latest changes
+in the live working copy in the database.  After committing a new
+revision and using the C<update> command to update the live WC, running
+this should do everything necessary to update the sites (except in
+exceptional circumstances like when you've changed custom templates).
+
+If you provide a C<-r> option with a revision number, then that revision
+will be used as the starting point for figuring out what changes need
+to be published.  The default is to start from the last revision which
+was published in this way.  There is no way to change the revision which
+the output is updated I<to>, it's always whatever is in the live working
+copy.
+
+=cut
+
+sub cmd_publish
+{
+    my ($cms, $opt) = @_;
+    update_live_sites($cms, $opt{r});
+}
+
+=item publish-url url [wc-id]
 
 Publish the given URL, writing its output however is specified by the
 configuration file.  This will fail if there isn't a suitable C<output>
@@ -149,10 +192,9 @@ content from, and defaults to the live working copy.
 
 =cut
 
-sub cmd_publish
+sub cmd_publish_url
 {
     my ($cms, $opt, $url, $wc_id) = @_;
-    #create_publishing_job($cms, $opt{r});
     my $db = $cms->db;
 
     my $wc = Daizu::Wc->new($cms, $wc_id);
@@ -230,7 +272,6 @@ sub cmd_update_urls
 
     my $wc = Daizu::Wc->new($cms, $wc_id);
     my $file = $wc->file_at_path($path);
-    # TODO - this should trigger generation of redirect or gone maps
     $file->update_urls_in_db;
 }
 
@@ -252,70 +293,28 @@ sub cmd_update_all_urls
 
     my $wc = Daizu::Wc->new($cms, $wc_id);
     my ($new_redirects, $new_gone) = update_all_file_urls($cms, $wc->{id});
+    # TODO - new return vals for update_all_file_urls
+    _update_redirect_maps($cms, $wc->id) if $new_redirects;
+    _update_gone_maps($cms, $wc->id) if $new_gone;
+}
 
-    if ($new_redirects) {
-        my $sth = $db->prepare(q{
-            select u.url, r.url
-            from url u
-            inner join url r on r.id = u.redirect_to_id
-            where u.status = 'R'
-        });
-        $sth->execute;
+sub _update_redirect_maps
+{
+    my ($cms, $wc_id) = @_;
 
-        my %fh;
-        while (my ($src, $target) = $sth->fetchrow_array) {
-            # TODO - very inefficient to use output_config every time round.
-            my ($config) = $cms->output_config($src);
-            $src = URI->new($src);
-            my $path = $src->rel($config->{url});
-            $path = '/' if $path eq './';
-            next if $path eq $src || $path =~ m!^\.\.?/!;
-            assert(defined $path && $path ne '') if DEBUG;
-            $path = "/$path" unless $path =~ m!^/!;
-
-            my $filename = $config->{redirect_map};
-            next unless defined $filename;
-            if (!exists $fh{$filename}) {
-                open my $fh, '>', $filename
-                    or die "Error opening redirect map '$filename': $!\n";
-                $fh{$filename} = $fh;
-            }
-
-            my $fh = $fh{$filename};
-            print $fh "$path\t$target\n";
-        }
+    while (my ($url, $config) = each %{$cms->{output}}) {
+        next unless defined $config->{redirect_map};
+        publish_redirect_map($cms, $wc_id, $config);
     }
+}
 
-    if ($new_gone) {
-        my $sth = $db->prepare(q{
-            select url
-            from url
-            where status = 'G'
-        });
-        $sth->execute;
+sub _update_gone_maps
+{
+    my ($cms, $wc_id) = @_;
 
-        my %fh;
-        while (my ($url) = $sth->fetchrow_array) {
-            # TODO - very inefficient to use output_config every time round.
-            my ($config) = $cms->output_config($url);
-            $url = URI->new($url);
-            my $path = $url->rel($config->{url});
-            $path = '/' if $path eq './';
-            next if $path eq $url || $path =~ m!^\.\.?/!;
-            assert(defined $path && $path ne '') if DEBUG;
-            $path = "/$path" unless $path =~ m!^/!;
-
-            my $filename = $config->{gone_map};
-            next unless defined $filename;
-            if (!exists $fh{$filename}) {
-                open my $fh, '>', $filename
-                    or die "Error opening gone map '$filename': $!\n";
-                $fh{$filename} = $fh;
-            }
-
-            my $fh = $fh{$filename};
-            print $fh "$path\t1\n";
-        }
+    while (my ($url, $config) = each %{$cms->{output}}) {
+        next unless defined $config->{gone_map};
+        publish_gone_map($cms, $wc_id, $config);
     }
 }
 
@@ -346,25 +345,30 @@ sub cmd_update_article
 Same as C<update-article> above, but reloads all article files which
 currently exist in the working copy.
 
+The whole thing is done in a single database transaction.
+
 =cut
 
 sub cmd_update_all_articles
 {
     my ($cms, $opt, $wc_id) = @_;
-    my $wc = Daizu::Wc->new($cms, $wc_id);
 
-    my $sth = $cms->db->prepare(q{
-        select id
-        from wc_file
-        where wc_id = ?
-          and article
-        order by path
+    transactionally($cms->db, sub {
+        my $wc = Daizu::Wc->new($cms, $wc_id);
+
+        my $sth = $cms->db->prepare(q{
+            select id
+            from wc_file
+            where wc_id = ?
+              and article
+            order by path
+        });
+        $sth->execute($wc->id);
+
+        while (my ($file_id) = $sth->fetchrow_array) {
+            Daizu::File->new($cms, $file_id)->update_loaded_article_in_db;
+        }
     });
-    $sth->execute($wc_id);
-
-    while (my ($file_id) = $sth->fetchrow_array) {
-        Daizu::File->new($cms, $file_id)->update_loaded_article_in_db;
-    }
 }
 
 =item url-content url [wc-id]
@@ -414,7 +418,8 @@ sub cmd_url_content
     binmode STDOUT
         or die "error setting binmode on STDOUT: $!";
     $generator->$method($file, [ {
-        url => $url,
+        url => URI->new($url),
+        generator => $file->{generator},
         method => $method,
         argument => $argument,
         type => $type,
@@ -443,37 +448,10 @@ sub publish_guid_urls
     die "$0: generator '$gen_class' is missing method '$method'\n"
         unless $generator->can($method);
 
-    for my $url_info (@$urls) {
-        my $out_url = $url_info->{url} = URI->new($url_info->{url});
-
-        my ($config, $docroot, $path, $filename) = $cms->output_config($out_url);
-        die "No output path defined for URL '$out_url'\n"
-            unless defined $docroot;
-
-        # TODO - open in staging area and move into place after all publication
-        # TODO - set mtime to modified_at
-        mkpath(file($docroot, $path)->stringify);
-        my $full_filename = file($docroot, $path, $filename);
-        open my $fh, '>', $full_filename
-            or die "Error opening output file '$full_filename': $!\n";
-        binmode $fh
-            or die "Error setting binmode on output file '$full_filename': $!\n";
-        $url_info->{fh} = $fh;
-        $url_info->{_full_filename} = $full_filename;
-    }
-
-    $generator->$method($file, $urls);
-
-    # Close the output files explicitly, so that any errors encountered while
-    # flushing buffers are correctly reported.
-    for my $url_info (@$urls) {
-        next unless defined $url_info->{fh};
-        close $url_info->{fh}
-            or die "Error closing output file '$url_info->{_full_filename}': $!\n";
-    }
+    publish_urls($cms, $file, $generator, $method, $urls);
 }
 
-=item publish-all base-url [wc-id]
+=item publish-site base-url [wc-id]
 
 Generates content for all URLs which start with the base URL given.
 For example, if base-url is L<http://www.daizucms.org/> then all of
@@ -482,7 +460,7 @@ to the proper output location as for the C<publish> command.
 
 =cut
 
-sub cmd_publish_all
+sub cmd_publish_site
 {
     my ($cms, $opt, $base_url, $wc_id) = @_;
     my $db = $cms->db;
@@ -523,6 +501,9 @@ sub cmd_publish_all
     publish_guid_urls($cms, $wc_id, $cur_guid_id, $cur_generator,
                       $cur_method, \@urls)
         if @urls;
+
+    _update_redirect_maps($cms, $wc->id);
+    _update_gone_maps($cms, $wc->id);
 }
 
 sub load_file

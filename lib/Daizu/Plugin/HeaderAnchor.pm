@@ -50,30 +50,31 @@ sub register
     $cms->add_html_dom_filter($path, $self => 'filter_article');
 }
 
-=item $self-E<gt>filter_article($cms, $doc)
+=item $self-E<gt>filter_article($cms, $file, $doc)
 
 Does the actual filtering in-place on C<$doc> and returns it.
-Currently C<$cms> is ignored.
+Currently C<$cms> and C<$file> are ignored.
 
 =cut
 
 sub filter_article
 {
-    my (undef, undef, $doc) = @_;
+    my (undef, undef, undef, $doc) = @_;
     my %name_used;
 
     # Find any anchors already used in the article, in case the user
     # wants to customize one, or put move an anchor to a specific place.
     # In that case we need to avoid adding an anchor with the same name.
-    for my $elem ($doc->findnodes(qq{
-        //*[namespace-uri() = 'http://www.w3.org/1999/xhtml' and
-            local-name() = 'a']
+    # We're only interested in ones starting with 'sec-' because that's
+    # all we generate.  Treat the IDs case insensitvely just to be on
+    # the safe side.
+    for ($doc->findnodes(qq{
+        //@*[name() = 'id' or name() = 'name' or name() = 'xml:id']
     }))
     {
-        for (qw( name id xml:id )) {
-            $name_used{$elem->getAttribute($_)} = undef
-                if $elem->hasAttribute($_);
-        }
+        my $value = $_->getValue;
+        $name_used{lc $value} = undef
+            if $value =~ /^sec-/i;
     }
 
     # Search for heading elements and add the anchors.
@@ -86,19 +87,21 @@ sub filter_article
         next unless $elem->localname =~ /^h[123456]$/;
 
         # If the heading already has an anchor, ignore it.
-        next if $doc->findnodes(q{
+        next if $elem->findnodes(q{
             *[namespace-uri() = 'http://www.w3.org/1999/xhtml' and
               local-name() = 'a' and
               (@name or @id)]
         });
+        next if $elem->hasAttribute('id');
 
-        my @words = ('sec', map { lc } split ' ', $elem->textContent);
-        for (@words) {
+        my $text = lc $elem->textContent;
+        for ($text) {
             s/\.+/./g;
-            s/[^.a-zA-Z0-9]+/-/g;
-            s/^[-.]+//;
-            s/[-.]+$//;
+            s/[^-.a-zA-Z0-9]+/ /g;
+            s/^[-. ]+//;
+            s/[-. ]+$//;
         }
+        my @words = ('sec', split ' ', $text);
         @words = map { $_ eq '' ? () : ($_) } @words;
 
         # Shorten it to at most three words.
@@ -109,7 +112,7 @@ sub filter_article
             if @words == ($max_words + 1) &&
                $words[$max_words] =~/^(?:a|the|and|or|of|in|at|to)$/;
 
-        @words = ('unnamed') if @words == 0;
+        push @words, 'unnamed' if @words == 1;
         my $anchor_name = join '-', @words;
 
         # Make sure it's unique (within the content we can see) by
@@ -129,7 +132,7 @@ sub filter_article
         $elem->insertBefore($anchor, $elem->firstChild);
     }
 
-    return $doc;
+    return { content => $doc };
 }
 
 =back

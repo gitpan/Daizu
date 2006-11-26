@@ -18,7 +18,7 @@ find({ wanted => \&wanted, no_chdir => 1 }, 'lib');
 
 # Programs which should also have POD.
 push @pm, 'bin/daizu', 'cgi/preview.cgi',
-          'upgrade-0.1-0.2.pl', 'downgrade-0.2-0.1.pl';
+          glob('upgrade/*/*.pl');
 
 sub wanted
 {

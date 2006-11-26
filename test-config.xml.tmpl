@@ -20,9 +20,9 @@
 
  <guid-entity entity="example1.com,2006" />
 
- <output url="http://www.example.com/" path="@TEST_DOCROOT_DIR@/example.com"
-         redirect-map="@TEST_DOCROOT_DIR@/example.com-redirect.map"
-         gone-map="@TEST_DOCROOT_DIR@/example.com-gone.map"
+ <output url="http://www.example.com/" path="@TEST_OUTPUT_DIR@/example.com"
+         redirect-map="@TEST_OUTPUT_DIR@/example.com-redirect.map"
+         gone-map="@TEST_OUTPUT_DIR@/example.com-gone.map"
          index-filename="index.shtml" />
  <config path="example.com">
   <guid-entity entity="example2.com,2006" />
@@ -32,11 +32,16 @@
   <guid-entity entity="example3.com,2006" />
  </config>
 
- <output url="http://foo.com/" path="@TEST_DOCROOT_DIR@/foo.com" />
+ <output url="http://foo.com/" path="@TEST_OUTPUT_DIR@/foo.com" />
  <config path="foo.com">
   <guid-entity entity="foo.com,2006" />
   <generator class="Daizu::Gen">
-   <google-sitemap />
+   <xml-sitemap />
+  </generator>
+ </config>
+ <config path="foo.com/blog">
+  <generator class="Daizu::Gen::Blog">
+   <homepage num-articles="5" />
   </generator>
  </config>
 
@@ -47,6 +52,11 @@
  <plugin class="Daizu::Plugin::PictureArticle">
   <thumbnail max-width="300" />
  </plugin>
+ <plugin class="Daizu::Plugin::DisplayPicture">
+  <thumbnail max-width="300" />
+ </plugin>
+ <plugin class="Daizu::Plugin::ImageMetadata" />
+ <plugin class="Daizu::Plugin::RelatedLinks" />
 
 </config>
 

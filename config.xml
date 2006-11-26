@@ -39,10 +39,11 @@
 
   <!-- Provide extra configuration for the Daizu::Gen generator,
        when it is used on a particular website, to enable the
-       creation of a Google sitemap file.
+       creation of a XML sitemap file (for Google and other
+       search engines).
     -->
   <generator class="Daizu::Gen">
-   <google-sitemap />
+   <xml-sitemap />
   </generator>
 
  <!-- End of configuration specific to 'example.com'. -->
@@ -60,6 +61,13 @@
  <!-- This plugin adds convenient 'anchors' to headings, so
       that you can link to specific sections of pages.  -->
  <plugin class="Daizu::Plugin::HeaderAnchor" />
+
+ <!-- Add missing width, height, alt, and title attributes to
+      images.  -->
+ <plugin class="Daizu::Plugin::ImageMetadata" />
+
+ <!-- Provide a box of 'related links' on some articles.  -->
+ <plugin class="Daizu::Plugin::RelatedLinks" />
 
  <!-- Use templates from the filesystem instead of the
       database.

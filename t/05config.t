@@ -108,7 +108,7 @@ is(scalar @{$cms->{article_loaders}{$_}{''}}, 1,
         'text/x-perl',                          # Daizu::Plugin::PodArticle
         'image/*';                              # Daizu::Plugin::PictureArticle
 
-is(scalar keys %{$cms->{html_dom_filters}}, 2,
+is(scalar keys %{$cms->{html_dom_filters}}, 5,
    'right number of HTML DOM filters');
 my $SYNHI = 'Daizu::Plugin::SyntaxHighlight->do_syntax_highlighting';
 is(scalar keys %{$cms->{html_dom_filters}{$SYNHI}}, 1,
@@ -122,7 +122,7 @@ is($cms->{html_dom_filters}{$SYNHI}{''}[1], 'do_syntax_highlighting',
    'syntax-highlighting DOM filter method');
 
 # <generator>
-is(scalar keys %{$cms->{generator_config}}, 1,
+is(scalar keys %{$cms->{generator_config}}, 2,
    'right number of generator configs');
 is(scalar keys %{$cms->{generator_config}{'Daizu::Gen'}}, 1,
    'right number of Daizu::Gen configs');
@@ -138,7 +138,7 @@ is(scalar keys %{$cms->{output}}, 2,
    'right number of output configs');
 {
     # Check that the <output> elements were loaded correctly.
-    my $root = $Daizu::Test::TEST_DOCROOT_DIR;
+    my $root = $Daizu::Test::TEST_OUTPUT_DIR;
     isa_ok($cms->{output}{'http://www.example.com/'}{url}, 'URI',
            'output url for example.com');
     is($cms->{output}{'http://www.example.com/'}{url}->as_string,

@@ -1,3 +1,0 @@
-<link rel="alternate" type="[% first_feed_type |html %]" title="Blog feed"
-      href="[% first_feed_url |html %]">
-[% INCLUDE 'no-override:head/meta.tt' %]

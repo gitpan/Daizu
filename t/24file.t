@@ -11,7 +11,7 @@ use Daizu::File;
 use Daizu::Util qw( db_row_id db_select );
 use Daizu::HTML qw( dom_body_to_html4 );
 
-init_tests(87);
+init_tests(95);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;
@@ -74,6 +74,36 @@ is($wc->file_at_path('top-level')->directory_path, '',
 
     is($parent->directory_path, 'foo.com/blog/2006/fish-fingers',
        '$parent->directory_path');
+}
+
+# file_at_path
+{
+    my $file = $file_1->file_at_path('/example.com/fractal.png');
+    is($file->{path}, 'example.com/fractal.png',
+       'file_at_path: /example.com/fractal.png');
+
+    $file = $file_1->file_at_path('/./example.com/./fractal.png');
+    is($file->{path}, 'example.com/fractal.png',
+       'file_at_path: /./example.com/./fractal.png');
+
+    $file = $file_1->file_at_path('article-2.html');
+    is($file->{path}, 'foo.com/blog/2006/fish-fingers/article-2.html',
+       'file_at_path: article-2.html');
+
+    $file = $file_1->file_at_path('../parsnips');
+    is($file->{path}, 'foo.com/blog/2006/parsnips',
+       'file_at_path: ../parsnips');
+
+    $file = $file_1->file_at_path('../../2005/photos/wasp-on-holly-leaf.jpg');
+    is($file->{path}, 'foo.com/blog/2005/photos/wasp-on-holly-leaf.jpg',
+       'file_at_path: ../../2005/photos/wasp-on-holly-leaf.jpg');
+
+    # Bad paths.
+    for ('/.', '..', '/example.com/fractal.png/') {
+        $@ = undef;
+        eval { $file_1->file_at_path('/.') };
+        like($@, qr/no file at/, "file_at_path: $_");
+    }
 }
 
 # article_doc
@@ -145,8 +175,10 @@ is($wc->file_at_path('top-level')->directory_path, '',
        "<p>Blog article 2</p>\n\n" .
        "<p>This one has three pages but no fold mark, so the first" .
        " page break\012should be treated like a fold.</p>\n\n" .
-       "<p>It also has some UTF-8 stuff:" .
-       enc("\x{A0}\x{201C}\x{2014}\x{201D}</p>\n\n") .
+       enc("<!-- Unicode text: \x{8A9E} -->\n" .
+           "<p title=\"Some \x{2018}UTF-8\x{2019} text\">" .
+           "It also has some UTF-8 stuff:" .
+           "\x{A0}\x{201C}\x{2014}\x{201D}</p>\n\n") .
        "\n\n" .
        "<p>Content on page 2.</p>\n\n" .
        "\n\n" .
@@ -158,8 +190,10 @@ is($wc->file_at_path('top-level')->directory_path, '',
        "<p>Blog article 2</p>\n\n" .
        "<p>This one has three pages but no fold mark, so the first" .
        " page break\012should be treated like a fold.</p>\n\n" .
-       "<p>It also has some UTF-8 stuff:" .
-       enc("\x{A0}\x{201C}\x{2014}\x{201D}</p>\n\n"),
+       enc("<!-- Unicode text: \x{8A9E} -->\n" .
+           "<p title=\"Some \x{2018}UTF-8\x{2019} text\">" .
+           "It also has some UTF-8 stuff:" .
+           "\x{A0}\x{201C}\x{2014}\x{201D}</p>\n\n"),
        'article_content_html4: page 1');
 
     is($file_2->article_content_html4(2),
@@ -210,8 +244,10 @@ is($file_3->article_extract,
        "<p>Blog article 2</p>\n\n" .
        "<p>This one has three pages but no fold mark, so the first" .
        " page break\012should be treated like a fold.</p>\n\n" .
-       "<p>It also has some UTF-8 stuff:" .
-       enc("\x{A0}\x{201C}\x{2014}\x{201D}</p>\n\n"),
+       enc("<!-- Unicode text: \x{8A9E} -->\n" .
+           "<p title=\"Some \x{2018}UTF-8\x{2019} text\">" .
+           "It also has some UTF-8 stuff:" .
+           "\x{A0}\x{201C}\x{2014}\x{201D}</p>\n\n"),
        'article_snippet: article 2, cut before page break');
 }
 

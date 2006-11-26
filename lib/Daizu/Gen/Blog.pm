@@ -5,21 +5,16 @@ use strict;
 use base 'Daizu::Gen';
 
 use DateTime;
-use DateTime::Format::Pg;
 use Carp::Assert qw( assert DEBUG );
 use Encode qw( encode decode );
 use Daizu;
 use Daizu::Feed;
 use Daizu::Util qw(
     trim like_escape validate_number
-    parse_db_datetime
-    db_select
+    validate_date parse_db_datetime db_datetime
+    db_row_exists db_select db_select_col
     xml_attr xml_croak
 );
-
-# This is used for the generator name below.  I want it in a normal
-# variable so that it's easier to interpolate into SQL queries.
-my $CLASS = __PACKAGE__;
 
 =head1 NAME
 
@@ -80,6 +75,9 @@ the content of articles above the 'fold' (or all the content when there
 is no fold), and will have the URL 'feed.atom' relative to the URL of the
 blog directory.
 
+The configuration can also change the number of articles shown on the blog
+homepage.  The default S<is 10>.
+
 If you want to change these defaults, for example to add an RSS feed as
 well as the Atom one, then you'll need to add C<feed> elements to the
 generator configuration for the blog directory, something like this:
@@ -87,9 +85,13 @@ generator configuration for the blog directory, something like this:
 =for syntax-highlight xml
 
     <generator class="Daizu::Gen::Blog" path="ungwe.org/blog">
+     <homepage num-articles="8" />
      <feed format="atom" type="content" />
      <feed format="rss2" type="description" url="qefsblog.rss" />
     </generator>
+
+There can be at most one C<homepage> element, which must have an attribute
+C<num-articles> containing a number.  The minimum value S<is 1>.
 
 Each feed element can have the following attributes:
 
@@ -139,6 +141,8 @@ depends on the 'type' value.
 
 =cut
 
+my $DEFAULT_HOMEPAGE_NUM_ARTICLES = 10;
+
 our $DEFAULT_FEED_FORMAT = 'atom';
 our $DEFAULT_FEED_TYPE = 'snippet';
 our %DEFAULT_FEED_SIZE = (
@@ -166,6 +170,7 @@ sub new
 {
     my $class = shift;
     my $self = $class->SUPER::new(@_);
+    $self->{blog_homepage_num_articles} = $DEFAULT_HOMEPAGE_NUM_ARTICLES;
 
     # Load configuration, if there is any.
     my @feeds;
@@ -190,6 +195,20 @@ sub new
                 size => $size,
                 url => $url,
             };
+        }
+
+        my $homepage_conf_found;
+        for my $elem ($conf->getChildrenByTagNameNS($Daizu::CONFIG_NS,
+                                                    'homepage'))
+        {
+            xml_croak($config_filename, $elem, 'too many <homepage> elements')
+                if $homepage_conf_found;
+            $homepage_conf_found = 1;
+
+            my $num = trim(xml_attr($config_filename, $elem, 'num-articles'));
+            xml_croak($config_filename, $elem, "bad value for 'num-articles'")
+                unless $num =~ /^\d+$/ && $num >= 1;
+            $self->{blog_homepage_num_articles} = $num;
         }
     }
 
@@ -262,12 +281,13 @@ sub custom_base_url
     # ancillary files in the directory will be published alongside the
     # article.
     if ($file->{is_dir}) {
-        my ($article_id) = $self->{cms}{db}->selectrow_array(q{
+        my ($article_id) = $self->{cms}{db}->selectrow_array(qq{
             select id
             from wc_file
             where parent_id = ?
               and article
               and name ~ '^_index\\\.'
+              and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
             order by name
             limit 1
         }, undef, $file->{id});
@@ -340,13 +360,12 @@ sub root_dir_urls_info
         from wc_file
         where wc_id = ?
           and article
-          and generator = '$CLASS'
+          and root_file_id = ?
           and not retired
-          and path like ?
           and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
         order by year
     });
-    $sth->execute($file->{wc_id}, like_escape($self->{root_file}{path}) . '/%');
+    $sth->execute($file->{wc_id}, $self->{root_file}{id});
 
     my $last_year;
     while (my ($year, $month) = $sth->fetchrow_array) {
@@ -374,9 +393,10 @@ sub root_dir_urls_info
 
 =item $gen-E<gt>article_template_variables($file, $url_info)
 
-This method is overridden to provide extra information to the template
-I<blog/head_meta.tt> so that it can correctly provide a C<link> element
-pointing to the first blog feed.
+This method is overridden to provide extra links to be output in the
+I<head/meta.tt> template.  It always returns a C<head_links> value
+containing a link to the blogs first feed, and for articles it also
+returns links to the previous and next articles.
 
 =cut
 
@@ -385,80 +405,347 @@ sub article_template_variables
     my ($self, $file, $url_info) = @_;
     my $cms = $self->{cms};
 
-    my $feed_url_info;
+    # Call the Daizu::Gen version for articles and the home page, to get
+    # description and keywords metadata.  We don't call it for other pages
+    # because that would give all archive pages the description intended
+    # for the blog homepage.
+    my $url_method = $url_info->{method};
+    my $var = $url_method eq 'article' || $url_method eq 'homepage'
+            ? $self->SUPER::article_template_variables($file, $url_info)
+            : {};
+
+    # Add a <link> for the first feed URL.
+    my @links;
     for ($self->urls_info($self->{root_file})) {
-        next unless $_->{generator} eq $CLASS && $_->{method} eq 'feed';
-        $feed_url_info = $_;
+        next unless $_->{method} eq 'feed';
+
+        my $feed_title = $self->{root_file}->title;
+        $feed_title = defined $feed_title ? "Feed for $feed_title"
+                                          : 'Blog feed';
+        push @links, {
+            rel => 'alternate',
+            href => $_->{url},
+            type => $_->{type},
+            title => $feed_title,
+        };
         last;
     }
-    assert(defined $feed_url_info) if DEBUG;
+    assert(@links) if DEBUG;
 
-    my %links;
-    my ($prev_url, $prev_type, $prev_title) = $cms->{db}->selectrow_array(qq{
-        select u.url, u.content_type, f.title
-        from wc_file f
-        inner join url u on u.wc_id = f.wc_id and u.guid_id = f.guid_id
-        where f.wc_id = ?
-          and u.generator = '$CLASS'
-          and u.method = 'article'
-          and u.status = 'A'
-          and f.issued_at < ?
-          and path like ?
-        order by f.issued_at desc, f.id desc
-        limit 1
-    }, undef, $file->{wc_id}, $file->{issued_at},
-              like_escape($self->{root_file}{path}) . '/%');
-    if (defined $prev_url) {
-        $links{prev} = {
-            href => URI->new($prev_url),
-            type => $prev_type,
-            title => decode('UTF-8', $prev_title, Encode::FB_CROAK),
-        };
-    }
-    my ($next_url, $next_type, $next_title) = $cms->{db}->selectrow_array(qq{
-        select u.url, u.content_type, f.title
-        from wc_file f
-        inner join url u on u.wc_id = f.wc_id and u.guid_id = f.guid_id
-        where f.wc_id = ?
-          and u.generator = '$CLASS'
-          and u.method = 'article'
-          and u.status = 'A'
-          and f.issued_at > ?
-          and path like ?
-        order by f.issued_at, f.id
-        limit 1
-    }, undef, $file->{wc_id}, $file->{issued_at},
-              like_escape($self->{root_file}{path}) . '/%');
-    if (defined $next_url) {
-        $links{next} = {
-            href => URI->new($next_url),
-            type => $next_type,
-            title => decode('UTF-8', $next_title, Encode::FB_CROAK),
-        };
+    # Links to previous or next page.
+    my $root_file_id = $self->{root_file}{id};
+    for my $rel (qw( prev next )) {
+        my $cmp =   $rel eq 'prev' ? '<'    : '>';
+        my $order = $rel eq 'prev' ? 'desc' : 'asc';
+
+        # Article pages.
+        if ($url_method eq 'article') {
+            my ($url, $type, $title) = _nextprev_article(
+                $cms->{db}, $file->{wc_id}, $root_file_id, $file->issued_at,
+                $cmp);
+            next unless defined $url;
+
+            push @links, {
+                rel => $rel,
+                href => URI->new($url),
+                type => $type,
+                title => decode('UTF-8', $title, Encode::FB_CROAK),
+            };
+        }
+
+        # Archive pages.
+        for my $method (qw( year_archive month_archive )) {
+            next unless $url_method eq $method;
+            my ($url, $arg, $type) = $cms->{db}->selectrow_array(qq{
+                select url, argument, content_type
+                from url
+                where wc_id = ?
+                  and guid_id = ?
+                  and method = ?
+                  and status = 'A'
+                  and argument $cmp ?
+                order by argument $order
+                limit 1
+            }, undef, $file->{wc_id}, $file->{guid_id}, $method,
+                      $url_info->{argument});
+            next unless defined $url;
+
+            $url = URI->new($url);
+            my $title_method = "${method}_title";
+            push @links, {
+                rel => $rel,
+                href => $url,
+                type => $type,
+                title => $self->$title_method($url, split ' ', $arg),
+            };
+        }
     }
 
-    return {
-        first_feed_url => $feed_url_info->{url},
-        first_feed_type => $feed_url_info->{type},
-        head_links => \%links,
-    };
+    push @{$var->{head_links}}, @links
+        if @links;
+
+    return $var;
 }
 
 =item $gen-E<gt>article_template_overrides($file, $url_info)
 
 This method is overridden to adjust the display of article metadata for
 blogs, since blog articles should display their author and publication
-time.  It also provides a rewrite which adds a feed auto-subscription
-link to the heading of the page.
+time.
 
 =cut
 
 sub article_template_overrides
 {
     return {
-        'head/meta.tt' => 'blog/head_meta.tt',
         'article_meta.tt' => 'blog/article_meta.tt',
     };
+}
+
+=item $gen-E<gt>url_updates_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)
+
+See L<the baseclass documentation|Daizu::Gen/$gen-E<gt>url_updates_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)>
+for details.
+
+This implementation causes the blog directory to be updated if there are
+any changes which might mean different URLs are produced for things like
+archive pages.  It also update URLs for articles inside a directory
+belonging to the file if its generator is changed, which in some
+circumstances might mean they get a different URL.
+
+=cut
+
+sub url_updates_for_file_change
+{
+    my ($self, $wc_id, $guid_id, $file_id, $status, $changes) = @_;
+    my @update = @{ $self->SUPER::url_updates_for_file_change(
+                        $wc_id, $guid_id, $file_id, $status, $changes) };
+
+    # There's no need to update the root file if we're it, because Daizu
+    # will already have done that.
+    # TODO - this won't work if the root file is fake (if $status='D')
+    my $root_guid_id = $self->{root_file}{guid_id};
+    return \@update
+        if $guid_id == $root_guid_id;
+
+    if ($status eq 'D') {
+        push @update, $root_guid_id;
+    }
+    else {
+        my $file = Daizu::File->new($self->{cms}, $file_id);
+
+        # Maybe this article will require a new archive page to be created.
+        if ($changes->{_new_article}) {
+            my $issued = $file->issued_at;
+            my $month_archive_exists = db_row_exists($self->{cms}{db}, 'url',
+                wc_id => $wc_id,
+                guid_id => $root_guid_id,
+                method => 'month_archive',
+                argument => sprintf('%04d %02d', $issued->year, $issued->month),
+            );
+            push @update, $root_guid_id
+                if !$month_archive_exists;
+        }
+
+        # If the type of file changes between being an article and an
+        # unprocessed file, that might change the URLs of files in its
+        # directory, if it has a directory all to itself.
+        # Note that we don't do this when a blog article is deleted.  In
+        # that case any ancillary files have probably also been deleted,
+        # and if they haven't the author is likely to do something with
+        # them soon anyway, so they don't need to have their URLs changed
+        # automatically.
+        if ($changes->{_new_article} != $changes->{_old_article} &&
+            $file->{name} =~ /^_index\./)
+        {
+            my $parent = $file->parent;
+            assert(defined $parent) if DEBUG;   # not inside blog directory
+            my $guids = $self->{cms}{db}->selectcol_arrayref(q{
+                select guid_id
+                from wc_file
+                where wc_id = ?
+                  and not is_dir
+                  and id <> ?
+                  and path like ?
+            }, undef, $wc_id, $file_id, like_escape($parent->{path}) . '/%');
+            push @update, @$guids;
+        }
+    }
+
+    return \@update;
+}
+
+=item $gen-E<gt>publishing_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)
+
+See L<the baseclass documentation|Daizu::Gen/$gen-E<gt>publishing_for_file_change($wc_id, $guid_id, $file_id, $status, $changes)>
+for details.
+
+This implementation republishes archive pages to include new articles,
+and the blog homepage and feed if necessary.  It also republishes articles
+which might include a previous/next article link which would be affected
+by the changes.
+
+=cut
+
+sub publishing_for_file_change
+{
+    my ($self, $wc_id, $guid_id, $file_id, $status, $changes) = @_;
+    return [] if $guid_id == $self->{root_file}{guid_id};
+
+    my $db = $self->{cms}{db};
+    my @publish;
+
+    my $new_issued = $changes->{_new_issued};
+    my $old_issued = $changes->{_old_issued};
+
+    my $root_file_id = $self->{root_file}{id};
+    my $root_guid_id = $self->{root_file}{guid_id};
+
+    if ($changes->{_new_article} || $changes->{_old_article}) {
+        # Changes which may require the year and month archive pages to be
+        # republished.
+        if ($status ne 'M' ||
+            (defined $old_issued && defined $new_issued &&
+             ($old_issued->year != $new_issued->year ||
+              $old_issued->month != $new_issued->month)) ||
+            exists $changes->{_article_url} ||
+            exists $changes->{'dc:title'} ||
+            exists $changes->{'dc:description'})
+        {
+            # Republish the URLs for the year and month archive pages which the
+            # article would appear in before and after the changes.
+            for ($old_issued, $new_issued) {
+                next unless defined;
+
+                my $url = db_select($db, 'url', {
+                    wc_id => $wc_id,
+                    guid_id => $root_guid_id,
+                    method => 'year_archive',
+                    argument => sprintf('%04d', $_->year),
+                    status => 'A',
+                }, 'url');
+                push @publish, $url if defined $url;
+
+                $url = db_select($db, 'url', {
+                    wc_id => $wc_id,
+                    guid_id => $root_guid_id,
+                    method => 'month_archive',
+                    argument => sprintf('%04d %02d', $_->year, $_->month),
+                    status => 'A',
+                }, 'url');
+                push @publish, $url if defined $url;
+            }
+        }
+
+        my $max_issued = $new_issued;
+        $max_issued = $old_issued
+            if defined $old_issued && (!defined $new_issued ||
+                                       $old_issued > $new_issued);
+        my ($pos) = $db->selectrow_array(q{
+            select count(*)
+            from wc_file
+            where wc_id = ?
+              and root_file_id = ?
+              and article
+              and not retired
+              and issued_at > ?
+        }, undef, $wc_id, $root_file_id, db_datetime($max_issued));
+
+        # Republish homepage if the article appears in it, or used to.
+        push @publish, $self->{root_file}->permalink
+            if $pos < $self->{blog_homepage_num_articles};
+
+        # Republish any feeds which the article will, or did, appear in.
+        {
+            my $sth = $db->prepare(q{
+                select url, argument
+                from url
+                where wc_id = ?
+                  and guid_id = ?
+                  and method = 'feed'
+                  and status = 'A'
+            });
+            $sth->execute($wc_id, $root_guid_id);
+            while (my ($url, $arg) = $sth->fetchrow_array) {
+                my (undef, undef, $size) = split ' ', $arg;
+                warn "bad feed argument '$arg'", next
+                    unless defined $size && $size =~ /^\d+$/;
+                next unless $pos < $size;
+                push @publish, $url;
+            }
+        }
+
+        # If necessary, republish the article pages before and after this one,
+        # because they have should have links to it, which will include this
+        # article's title as the cover text.
+        my ($new_prev_url, $new_next_url);
+        if (defined $new_issued) {
+            ($new_prev_url) = _nextprev_article($db, $wc_id, $root_file_id,
+                                                $new_issued, '<');
+            ($new_next_url) = _nextprev_article($db, $wc_id, $root_file_id,
+                                                $new_issued, '>');
+        }
+        my ($old_prev_url, $old_next_url);
+        if (defined $old_issued) {
+            ($old_prev_url) = _nextprev_article($db, $wc_id, $root_file_id,
+                                                $old_issued, '<');
+            ($old_next_url) = _nextprev_article($db, $wc_id, $root_file_id,
+                                                $old_issued, '>');
+        }
+        if ($status ne 'M' ||
+            exists $changes->{'dc:title'} ||
+            exists $changes->{_article_url} ||
+            (defined $old_issued &&
+             ((defined $new_prev_url && defined $old_prev_url &&
+               $new_prev_url ne $old_prev_url) ||
+              (defined $new_next_url && defined $old_next_url &&
+               $new_next_url ne $old_next_url))))
+        {
+            for ($new_prev_url, $new_next_url, $old_prev_url, $old_next_url) {
+                next unless defined;
+                push @publish, $_;
+            }
+        }
+    }
+
+    return \@publish;
+}
+
+=item $gen-E<gt>publishing_for_url_change($wc_id, $status, $old_url_info, $new_url_info)
+
+See L<the baseclass documentation|Daizu::Gen/$gen-E<gt>publishing_for_url_change($wc_id, $status, $old_url_info, $new_url_info)>
+for details.
+
+This implementation causes all the archive pages, the homepage, and all
+the articles to be republished if there are any URL changes which
+would affect the navigation menu.  This will normally happen at most
+once per month when a new month (and possibly year) entry needs to appear
+in the menu.
+
+=cut
+
+sub publishing_for_url_change
+{
+    my ($self, $wc_id, $status, $old_url_info, $new_url_info) = @_;
+
+    # We're only interested in pages which appear in the archive menus.
+    my $important_change;
+    for ($old_url_info, $new_url_info) {
+        next unless defined;
+        next unless $_->{method} =~ /^(?:homepage|year_archive|month_archive)$/;
+        $important_change = 1;
+    }
+    return [] unless $important_change;
+
+    return $self->{cms}{db}->selectcol_arrayref(q{
+        select url
+        from url
+        where wc_id = ?
+          and status = 'A'
+          and ((guid_id = ? and method in ('homepage', 'year_archive',
+                                           'month_archive'))
+            or (root_file_id = ? and method = 'article'))
+    }, undef, $wc_id, $self->{root_file}{guid_id}, $self->{root_file}{id});
 }
 
 =item $gen-E<gt>homepage($file, $urls)
@@ -472,7 +759,6 @@ sub homepage
 {
     my ($self, $file, $urls) = @_;
     my $cms = $self->{cms};
-    my $HOW_MANY = 10;       # TODO - put this in the config
 
     for my $url (@$urls) {
         my $sth = $cms->{db}->prepare(qq{
@@ -480,14 +766,14 @@ sub homepage
             from wc_file
             where wc_id = ?
               and article
-              and generator = '$CLASS'
+              and root_file_id = ?
               and not retired
-              and path like ?
+              and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
             order by issued_at desc, id desc
             limit ?
         });
-        $sth->execute($file->{wc_id}, like_escape($file->{path}) . '/%',
-                      $HOW_MANY);
+        $sth->execute($file->{wc_id}, $self->{root_file}{id},
+                      $self->{blog_homepage_num_articles});
 
         my @articles;
         while (my ($id) = $sth->fetchrow_array) {
@@ -516,19 +802,8 @@ sub feed
     my ($self, $file, $urls) = @_;
     my $cms = $self->{cms};
 
-    my $sth = $cms->{db}->prepare(qq{
-        select id
-        from wc_file
-        where wc_id = ?
-          and article
-          and generator = '$CLASS'
-          and not retired
-          and path like ?
-        order by issued_at desc, id desc
-        limit ?
-    });
-
-    # Run the query to get enough entries for the largest feed.
+    # Extract the feed configurations from the arguments, and find out how
+    # many articles are needed for the largest feed.
     my $feeds = $self->{feeds};
     my $largest_size = 0;
     for my $url (@$urls) {
@@ -539,8 +814,20 @@ sub feed
         $largest_size = $size
             if $size > $largest_size;
     }
-    $sth->execute($file->{wc_id}, like_escape($file->{path}) . '/%',
-                  $largest_size);
+
+    # Get the articles, as many as needed for the largest feed.
+    my $sth = $cms->{db}->prepare(qq{
+        select id
+        from wc_file
+        where wc_id = ?
+          and article
+          and root_file_id = ?
+          and not retired
+          and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
+        order by issued_at desc, id desc
+        limit ?
+    });
+    $sth->execute($file->{wc_id}, $self->{root_file}{id}, $largest_size);
 
     my @articles;
     while (my ($id) = $sth->fetchrow_array) {
@@ -561,7 +848,7 @@ sub feed
         # The XML is printed in canonical form to avoid some extraneous
         # namespace declarations in the <content> of the Atom feed.
         my $fh = $url->{fh};
-        print $fh encode('UTF-8', $feed->xml->toStringC14N, , Encode::FB_CROAK);
+        print $fh encode('UTF-8', $feed->xml->toStringC14N, Encode::FB_CROAK);
     }
 }
 
@@ -588,13 +875,13 @@ sub year_archive
             from wc_file
             where wc_id = ?
               and article
-              and generator = '$CLASS'
+              and root_file_id = ?
               and not retired
-              and path like ?
+              and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
               and extract(year from issued_at) = ?
             order by issued_at, id
         });
-        $sth->execute($file->{wc_id}, like_escape($file->{path}) . '/%', $year);
+        $sth->execute($file->{wc_id}, $self->{root_file}{id}, $year);
 
         my @months;
         my $cur_month;
@@ -620,62 +907,47 @@ sub year_archive
             };
         }
 
-        my %links;
-        my ($prev_url, $prev_arg, $prev_type) = $cms->{db}->selectrow_array(qq{
-            select url, argument, content_type
-            from url
-            where wc_id = ?
-              and guid_id = ?
-              and generator = '$CLASS'
-              and method = 'year_archive'
-              and status = 'A'
-              and argument < ?
-            order by argument desc
-            limit 1
-        }, undef, $file->{wc_id}, $file->{guid_id}, $url->{argument});
-        if (defined $prev_url) {
-            $links{prev} = {
-                href => URI->new($prev_url),
-                type => $prev_type,
-                title => _year_archive_title($prev_arg),
-            };
-        }
-        my ($next_url, $next_arg, $next_type) = $cms->{db}->selectrow_array(qq{
-            select url, argument, content_type
-            from url
-            where wc_id = ?
-              and guid_id = ?
-              and generator = '$CLASS'
-              and method = 'year_archive'
-              and status = 'A'
-              and argument > ?
-            order by argument
-            limit 1
-        }, undef, $file->{wc_id}, $file->{guid_id}, $url->{argument});
-        if (defined $next_url) {
-            $links{next} = {
-                href => URI->new($next_url),
-                type => $next_type,
-                title => _year_archive_title($next_arg),
-            };
-        }
-
         $self->generate_web_page($file, $url, {
             %{ $self->article_template_overrides($file, $url) },
             'page_content.tt' => 'blog/year_index.tt',
         }, {
             %{ $self->article_template_variables($file, $url) },
             months => \@months,
-            page_title => _year_archive_title($year),
-            head_links => \%links,
+            page_title => $self->year_archive_title($url->{url}, $year),
         });
     }
 }
 
-sub _year_archive_title
+=item $gen-E<gt>year_archive_title($url, $year)
+
+Return a title for a year archive page.  Override this
+to change the kind of titles used.
+C<$url> is the URL of the archive page for C<$year>, as a L<URI> object.
+
+This default implementation returns something like 'Articles for 2006'.
+
+=cut
+
+sub year_archive_title
 {
-    my ($year) = @_;
+    my ($self, $url, $year) = @_;
     return "Articles for $year";
+}
+
+=item $gen-E<gt>year_archive_short_title($url, $year)
+
+Return an abbreviated title for a year archive page.  Override this
+to change the kind of titles used in the navigation menu.
+C<$url> is the URL of the archive page for C<$year>, as a L<URI> object.
+
+This default implementation returns the value of C<$year>.
+
+=cut
+
+sub year_archive_short_title
+{
+    my ($self, $url, $year) = @_;
+    return $year;
 }
 
 =item $gen-E<gt>month_archive($file, $urls)
@@ -701,15 +973,14 @@ sub month_archive
             from wc_file
             where wc_id = ?
               and article
-              and generator = '$CLASS'
+              and root_file_id = ?
               and not retired
-              and path like ?
+              and path !~ '(^|/)($Daizu::HIDING_FILENAMES)(/|\$)'
               and extract(year from issued_at) = ?
               and extract(month from issued_at) = ?
             order by issued_at, id
         });
-        $sth->execute($file->{wc_id}, like_escape($file->{path}) . '/%',
-                      $year, $month);
+        $sth->execute($file->{wc_id}, $self->{root_file}{id}, $year, $month);
 
         my @articles;
         while (my ($id, $permalink, $title, $description, $issued_at)
@@ -724,64 +995,51 @@ sub month_archive
             };
         }
 
-        my %links;
-        my ($prev_url, $prev_arg, $prev_type) = $cms->{db}->selectrow_array(qq{
-            select url, argument, content_type
-            from url
-            where wc_id = ?
-              and guid_id = ?
-              and generator = '$CLASS'
-              and method = 'month_archive'
-              and status = 'A'
-              and argument < ?
-            order by argument desc
-            limit 1
-        }, undef, $file->{wc_id}, $file->{guid_id}, $url->{argument});
-        if (defined $prev_url) {
-            $links{prev} = {
-                href => URI->new($prev_url),
-                type => $prev_type,
-                title => _month_archive_title(split ' ', $prev_arg),
-            };
-        }
-        my ($next_url, $next_arg, $next_type) = $cms->{db}->selectrow_array(qq{
-            select url, argument, content_type
-            from url
-            where wc_id = ?
-              and guid_id = ?
-              and generator = '$CLASS'
-              and method = 'month_archive'
-              and status = 'A'
-              and argument > ?
-            order by argument
-            limit 1
-        }, undef, $file->{wc_id}, $file->{guid_id}, $url->{argument});
-        if (defined $next_url) {
-            $links{next} = {
-                href => URI->new($next_url),
-                type => $next_type,
-                title => _month_archive_title(split ' ', $next_arg),
-            };
-        }
-
         $self->generate_web_page($file, $url, {
             %{ $self->article_template_overrides($file, $url) },
             'page_content.tt' => 'blog/month_index.tt',
         }, {
             %{ $self->article_template_variables($file, $url) },
             articles => \@articles,
-            page_title => _month_archive_title($year, $month),,
-            head_links => \%links,
+            page_title => $self->month_archive_title($url->{url},
+                                                     $year, $month),
         });
     }
 }
 
-sub _month_archive_title
+=item $gen-E<gt>month_archive_title($url, $year, $month)
+
+Return a title for a month archive page.  Override this
+to change the kind of titles used.
+C<$url> is the URL of the archive page for C<$year>, as a L<URI> object.
+
+This default implementation returns something like 'Articles for October 2006',
+with a non-breaking space between the month name and year.
+
+=cut
+
+sub month_archive_title
 {
-    my ($year, $month) = @_;
+    my ($self, $url, $year, $month) = @_;
     return 'Articles for ' .
            DateTime->new(year => $year, month => $month)
                    ->strftime("\%B\xA0\%Y");    # September&nbsp;2006
+}
+
+=item $gen-E<gt>month_archive_short_title($url, $year, $month)
+
+Return an abbreviated title for a month archive page.  Override this
+to change the kind of titles used in the navigation menu.
+C<$url> is the URL of the archive page for C<$year>, as a L<URI> object.
+
+This default implementation returns the full name of the month in English.
+
+=cut
+
+sub month_archive_short_title
+{
+    my ($self, $url, $year, $month) = @_;
+    return DateTime->new(year => $year, month => $month)->strftime('%B');
 }
 
 =item $gen-E<gt>navigation_menu($file, $url)
@@ -805,43 +1063,49 @@ sub navigation_menu
     my $cms = $self->{cms};
     my $db = $cms->{db};
     my $cur_url = $cur_url_info->{url};
+    my $root_file = $self->{root_file};
 
-    # We need to identify the blog directory.  Currently the root file of
-    # the generator used to create a URL isn't recorded with the URL, so
-    # we find the root file for the generator of the current file in the
-    # menu, and hope that's the same.
-    my $root_file = $cur_file->generator->{root_file};
+    # Start off with a menu item for the blog homepage.
+    my @menu;
+    {
+        my $homepage = $self->{root_file};
+        my $homepage_title = $homepage->title;
+        $homepage_title = 'Blog homepage' unless defined $homepage_title;
+        my $link = $homepage->permalink;
+        push @menu, {
+            ($cur_url->eq($link) ? () :
+                (link => $link->rel($cur_url))),
+            title => $homepage_title,
+            children => [],
+        };
+    }
 
     # As an optimization, set one of these values to the argument of the
     # current URL for comparison with those of items in the menu, if the
     # current URL might appear in the menu itself, so that we can more
     # efficiently determine which URL to leave without a link.
     my ($cur_year_arg, $cur_month_arg);
-    if ($cur_file->{guid_id} == $root_file->{guid_id} &&
-        $cur_url_info->{generator} eq $CLASS)
-    {
+    if ($cur_file->{guid_id} == $root_file->{guid_id}) {
         $cur_year_arg = $cur_url_info->{argument}
             if $cur_url_info->{method} eq 'year_archive';
         $cur_month_arg = $cur_url_info->{argument}
             if $cur_url_info->{method} eq 'month_archive';
     }
 
-    my $year_sth = $db->prepare(qq{
+    my $year_sth = $db->prepare(q{
         select url, argument
         from url
         where wc_id = ?
           and guid_id = ?
-          and generator = '$CLASS'
           and method = 'year_archive'
           and status = 'A'
         order by argument desc
     });
-    my $month_sth = $db->prepare(qq{
+    my $month_sth = $db->prepare(q{
         select url, argument
         from url
         where wc_id = ?
           and guid_id = ?
-          and generator = '$CLASS'
           and method = 'month_archive'
           and status = 'A'
           and argument like ? || ' %'
@@ -852,15 +1116,15 @@ sub navigation_menu
     # menu, so that I can decide not to include any more for older years.
     my $months_included = 0;
 
-    my @menu;
     $year_sth->execute($root_file->{wc_id}, $root_file->{guid_id});
     while (my ($year_url, $year) = $year_sth->fetchrow_array) {
+        $year_url = URI->new($year_url);
         my @months;
         push @menu, {
             (defined $cur_year_arg && $cur_year_arg eq $year ? () :
-                (link => URI->new($year_url)->rel($cur_url))),
-            title => _year_archive_title($year),
-            short_title => $year,
+                (link => $year_url->rel($cur_url))),
+            title => $self->year_archive_title($year_url, $year),
+            short_title => $self->year_archive_short_title($year_url, $year),
             children => \@months,
         };
 
@@ -869,14 +1133,15 @@ sub navigation_menu
         $month_sth->execute($root_file->{wc_id}, $root_file->{guid_id},
                             sprintf('%04d', $year));
         while (my ($month_url, $month_arg) = $month_sth->fetchrow_array) {
+            $month_url = URI->new($month_url);
             die unless $month_arg =~ /^\d+ (\d+)$/;
             my $month = $1;
             push @months, {
                 (defined $cur_month_arg && $cur_month_arg eq $month_arg ? () :
-                    (link => URI->new($month_url)->rel($cur_url))),
-                title => _month_archive_title($year, $month),
-                short_title => DateTime->new(year => $year, month => $month)
-                                       ->strftime('%B'),
+                    (link => $month_url->rel($cur_url))),
+                title => $self->month_archive_title($month_url, $year, $month),
+                short_title => $self->month_archive_short_title($month_url,
+                                                                $year, $month),
                 children => [],
             };
             ++$months_included;
@@ -884,6 +1149,27 @@ sub navigation_menu
     }
 
     return \@menu;
+}
+
+sub _nextprev_article
+{
+    my ($db, $wc_id, $root_file_id, $issued, $cmp) = @_;
+    assert(ref $issued) if DEBUG;   # should be a DateTime value
+    assert($cmp eq '<' || $cmp eq '>') if DEBUG;
+    my $order = $cmp eq '<' ? 'desc' : 'asc';
+
+    return $db->selectrow_array(qq{
+        select u.url, u.content_type, f.title
+        from wc_file f
+        inner join url u on u.wc_id = f.wc_id and u.guid_id = f.guid_id
+        where f.wc_id = ?
+          and f.root_file_id = ?
+          and u.method = 'article'
+          and u.status = 'A'
+          and f.issued_at $cmp ?
+        order by f.issued_at $order, f.id $order
+        limit 1
+    }, undef, $wc_id, $root_file_id, db_datetime($issued));
 }
 
 =back

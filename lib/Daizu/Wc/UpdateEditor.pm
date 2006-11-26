@@ -292,7 +292,7 @@ sub close_directory
         if $baton->{changed};
 
     $self->{cms}->call_property_loaders($baton->{id}, $props)
-        if defined $props;
+        if keys %$props;
 
     _update_file_authors($self, $baton->{id}, $baton->{path}, $props, 1)
         if exists $props->{'daizu:author'};
@@ -418,7 +418,7 @@ sub close_file
         if $baton->{changed};
 
     $self->{cms}->call_property_loaders($file_id, $props)
-        if defined $props;
+        if defined $props && keys %$props;
 
     if (exists $props->{'daizu:author'}) {
         _update_file_authors($self, $file_id, $baton->{path}, $props, 0);
@@ -430,10 +430,11 @@ sub close_file
 
     my $reload_article;
 
-    for (keys %Daizu::OVERRIDABLE_PROPERTY) {
-        $reload_article = 1
-            if exists $props->{$_};
-    }
+    # If any properties have changed, that may affect the article loader
+    # plugin or the output that is stored from it (especially things like
+    # 'dc:title', but for example 'daizu:alt' affects PictureArticles).
+    $reload_article = 1
+        if keys %$props;
 
     if (exists $props->{'daizu:type'}) {
         my $was_article = db_select($db, wc_file => $file_id, 'article');

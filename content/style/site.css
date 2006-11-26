@@ -5,6 +5,10 @@ body {
 	font-family: "Times New Roman", Times, serif;
 }
 
+h1, h2, h3, h4, h5, h6 {
+	font-weight: normal;
+}
+
 h2, h3 {
 	margin-bottom: 0;
 }
@@ -35,6 +39,7 @@ a:active  { color: #09F; background: #F6FBFF none; }
 #all-cols {
 	position: relative;
 	padding-bottom: 1em;
+	border: 1px solid #F6FBFF;
 }
 
 #content-col {
@@ -93,6 +98,25 @@ a:active  { color: #09F; background: #F6FBFF none; }
 	font-weight: normal;
 }
 
+/* Boxes of 'extra information' in the left and (mostly) right columns. */
+.extras-box h2 {
+	font-size: 120%;
+	margin-bottom: 0;
+}
+.extras-box {
+	margin-bottom: 3ex;
+}
+
+/* The Related Links box, added by the Daizu::Plugin::RelatedLinks plugin. */
+#box-related-links ul {
+	margin-top: 1ex;
+	margin-left: 0;
+}
+#box-related-links li {
+	margin-bottom: 0.5ex;
+	margin-left: 0;
+}
+
 /* Indent 'pre' blocks, give them a different background color, and put a
  * blue fade on the left hand side.
  */
@@ -121,6 +145,12 @@ img {
 	border: none;
 }
 
+/* Browsers may vary in what they do with these, so we'll standardize
+ * on italics.  */
+dfn, var {
+	font-style: italic;
+}
+
 /* The small text which appears under the heading for an article.
  * Can include author tagline, description, etc.  */
 #content-col .entry-meta p {
@@ -137,7 +167,7 @@ img {
  * a table for layout inside an article.  */ 
 .entry-content table {
 	border-collapse: collapse;
-	margin: 1ex 4ex 1.5ex;
+	margin: 1ex auto 1.5ex auto;
 }
 .entry-content td, .entry-content th {
 	padding: 0.5ex;
@@ -146,6 +176,16 @@ img {
 }
 .entry-content th {
 	text-align: center;
+}
+caption {
+	caption-side: bottom;
+	font-style: italic;
+	width: 100%;
+	margin: 1ex auto 1.5ex auto;
+}
+/* Toggle italics so that emphasis shows up in captions */
+caption em, caption i, caption dfn, caption var {
+	font-style: normal;
 }
 
 /* Turn off the dotted underline on <abbr> when it's used in the
@@ -258,6 +298,10 @@ span.syn-todo       { color: #0000FF ; background: #FFFF00 none }
 	background-color: #FFF;
 	border: 1px solid #004780;
 	margin-bottom: 1ex;
+}
+.display-picture a {
+	/* This is really to avoid an underline on the image. */
+	text-decoration: none;
 }
 
 /* vi:set ts=8 sw=8 noexpandtab: */

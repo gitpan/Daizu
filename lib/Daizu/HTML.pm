@@ -79,7 +79,7 @@ sub dom_node_to_html4
     my ($node) = @_;
     my $type = $node->nodeType;
 
-    return html_escape_text($node->data)
+    return encode('UTF-8', html_escape_text($node->data), Encode::FB_CROAK)
         if $type == XML::LibXML::XML_TEXT_NODE ||
            $type == XML::LibXML::XML_CDATA_SECTION_NODE;
 
@@ -95,7 +95,10 @@ sub dom_node_to_html4
             my $attr_name = lc $attr->localname;
             $html .= " $attr_name";
             my $boolattr = $HTML::Tagset::boolean_attr{$elem_name};
-            $html .= '="' . html_escape_attr($attr->value) . '"'
+            $html .= '="' .
+                     encode('UTF-8', html_escape_attr($attr->value),
+                            Encode::FB_CROAK) .
+                     '"'
                 unless $boolattr &&
                        ((!ref $boolattr && $boolattr eq $attr_name) ||
                         (ref $boolattr && $boolattr->{$attr_name}));
@@ -116,7 +119,9 @@ sub dom_node_to_html4
         return $html;
     }
 
-    return '<!--' . html_escape_text($node->data) . '-->'
+    return '<!--' .
+           encode('UTF-8', html_escape_text($node->data), Encode::FB_CROAK) .
+           '-->'
         if $type == XML::LibXML::XML_COMMENT_NODE;
 
     return ''
@@ -573,7 +578,7 @@ sub html_escape_text
     $s =~ s/&/&amp;/g;
     $s =~ s/</&lt;/g;
     $s =~ s/>/&gt;/g;
-    return encode('UTF-8', $s, Encode::FB_CROAK);
+    return $s;
 }
 
 =item html_escape_attr($text)
@@ -594,7 +599,7 @@ sub html_escape_attr
     $s =~ s/</&lt;/g;
     $s =~ s/>/&gt;/g;
     $s =~ s/"/&quot;/g;
-    return encode('UTF-8', $s, Encode::FB_CROAK);
+    return $s;
 }
 
 =back

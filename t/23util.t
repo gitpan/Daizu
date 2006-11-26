@@ -13,15 +13,14 @@ use Daizu::Util qw(
     validate_number validate_uri validate_mime_type
     validate_date w3c_datetime db_datetime rfc2822_datetime parse_db_datetime
     db_row_exists db_row_id db_select db_select_col
-    db_insert db_update db_replace db_delete
+    db_insert db_update db_replace db_delete transactionally
     wc_file_data guess_mime_type wc_set_file_data
     mint_guid load_class
-    update_all_file_urls
     add_xml_elem xml_attr xml_croak
     branch_id daizu_data_dir
 );
 
-init_tests(98);
+init_tests(107);
 
 my $cms = Daizu->new($Daizu::Test::TEST_CONFIG);
 my $db = $cms->db;
@@ -109,6 +108,13 @@ is(validate_uri('tag:example.com,2006:13'),
    'tag:example.com,2006:13',
    'validate_uri: tag URI');
 is(validate_uri('xyz'), undef, 'validate_uri: xyz');
+is(validate_uri('foo://auth/foo'), 'foo://auth/foo',
+   'validate_uri: foo://auth/foo');
+is(validate_uri('foo://auth#foo'), 'foo://auth#foo',
+   'validate_uri: foo://auth#foo');
+is(validate_uri('foo://auth'), 'foo://auth', 'validate_uri: foo://auth');
+is(validate_uri('foo:///foo'), 'foo:///foo', 'validate_uri: foo:///foo');
+is(validate_uri('foo:////foo'), undef, 'validate_uri: foo:////foo');
 
 # validate_mime_type
 is(validate_mime_type(undef), undef, 'validate_mime_type: undef');
@@ -179,7 +185,7 @@ is(w3c_datetime(parse_db_datetime('2006-07-20 23:45:20.349116'), 1),
 
 # db_row_exists
 ok(db_row_exists($db, 'branch'), 'db_row_exists: no criteria');
-ok(!db_row_exists($db, 'publish_job'), 'db_row_exists: empty table');
+ok(!db_row_exists($db, 'live_revision'), 'db_row_exists: empty table');
 ok(db_row_exists($db, 'branch', path => 'trunk'), 'db_row_exists: path=trunk');
 ok(!db_row_exists($db, 'branch', path => 'foo'), 'db_row_exists: path=foo');
 ok(db_row_exists($db, 'branch', path => 'trunk', id => 1),
@@ -271,6 +277,36 @@ is(db_row_id($db, 'branch', path => 'trunk'), 1, 'db_row_id: path=trunk');
 # db_update
 
 # db_replace
+eval {
+    transactionally($db, sub {
+        my $file = $wc->file_at_path('foo.com/blog/2005/photos/wasp-on-holly-leaf.jpg');
+
+        # Replace a row which doesn't already exist.
+        db_replace($db, 'wc_property',
+            { file_id => $file->{id}, name => 'foo' },
+            value => 'bar',
+        );
+        ok(db_row_exists($db, 'wc_property',
+            file_id => $file->{id},
+            name => 'foo',
+            value => 'bar',
+        ), 'db_replace: insert');
+
+        # Replace an existing row with a new one.
+        db_replace($db, 'wc_property',
+            { file_id => $file->{id}, name => 'dc:title' },
+            value => 'new title',
+        );
+        ok(db_row_exists($db, 'wc_property',
+            file_id => $file->{id},
+            name => 'dc:title',
+            value => 'new title',
+        ), 'db_replace: update');
+
+        die "--rollback--\n";
+    });
+};
+die $@ unless $@ eq "--rollback--\n";
 
 # db_delete
 
@@ -307,6 +343,19 @@ is(db_row_id($db, 'branch', path => 'trunk'), 1, 'db_row_id: path=trunk');
 }
 
 # guess_mime_type
+{
+    open my $fh, '<', file(qw( t data fractal.png )) or die $!;
+    my $data = do { local $/; <$fh> };
+    is(guess_mime_type(\$data, 'fractal.png'), 'image/png',
+       'guess_mime_type: fractal.png');
+
+    $data = q{
+        /* A CSS stylesheet */
+        body { color: black; background: white; }
+    };
+    is(guess_mime_type(\$data, 'test.css'), 'text/css',
+       'guess_mime_type: CSS stylesheet');
+}
 
 # wc_set_file_data
 
@@ -340,8 +389,6 @@ is(db_row_id($db, 'branch', path => 'trunk'), 1, 'db_row_id: path=trunk');
 }
 
 # load_class
-
-# update_all_file_urls
 
 # add_xml_elem
 

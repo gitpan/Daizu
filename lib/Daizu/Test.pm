@@ -9,19 +9,21 @@ our @EXPORT_OK = qw(
     init_tests test_config
     create_database drop_database
     create_test_repos
+    get_nav_menu_carefully test_menu_item
+    test_cmp_guids test_cmp_urls
 );
 
 use Path::Class qw( file dir );
 use DBI;
-use IO::Scalar;
 use File::Path qw( rmtree );
 use SVN::Core;
 use SVN::Ra;
 use SVN::Repos;
 use SVN::Delta;
 use Carp qw( croak );
-use Carp::Assert qw( assert DEBUG );
+use Carp::Assert qw( assert );
 use Test::More;
+use Daizu::Util qw( db_select );
 
 =head1 NAME
 
@@ -70,7 +72,7 @@ test repository.
 
 Value: I<test-repos.dump> in the current directory.
 
-=item $TEST_DOCROOT_DIR
+=item $TEST_OUTPUT_DIR
 
 Full path to the directory into which output from publishing test
 content should be written.
@@ -93,7 +95,7 @@ our $DB_SCHEMA_FILENAME = 'db.sql';
 our $TEST_REPOS_DIR = dir('.test-repos')->absolute->stringify;
 our $TEST_REPOS_URL = "file://$TEST_REPOS_DIR";
 our $TEST_REPOS_DUMP = file('test-repos.dump')->absolute->stringify;
-our $TEST_DOCROOT_DIR = dir('.test-docroot')->absolute->stringify;
+our $TEST_OUTPUT_DIR = dir('.test-output')->absolute->stringify;
 our $TEST_CONFIG = 'test-config.xml';
 
 =head1 FUNCTIONS
@@ -291,6 +293,155 @@ sub create_test_repos
     my $ra = SVN::Ra->new(url => $TEST_REPOS_URL);
     assert($ra->get_latest_revnum > 0);     # confirm undump worked
     return $ra;
+}
+
+=item get_nav_menu_carefully($file)
+
+Return the navigation menu for C<$file>, by calling the
+L<navigation_menu|Daizu::Gen/$gen-E<gt>navigation_menu($file, $url)>
+method on its generator.  The result is returned after some basic
+checks have been made that it is properly structured.  Any problems
+will cause an assertion to fail (even if C<DEBUG> isn't set).
+
+=cut
+
+sub get_nav_menu_carefully
+{
+    my ($file) = @_;
+    assert(ref $file);
+
+    my $gen = $file->generator;
+    my @urls = $gen->urls_info($file);
+    assert(@urls >= 1);
+
+    my $menu = $gen->navigation_menu($file, $urls[0]);
+
+    my $num_undef_links = _nav_menu_check_children($menu);
+    assert($num_undef_links == 0 || $num_undef_links == 1);
+
+    return $menu;
+}
+ 
+# Check a an array of menu items for structural integrity.  The value
+# should be suitable for being a 'children' item in a navigation menu.
+sub _nav_menu_check_children
+{
+    my ($items) = @_;
+    assert(defined $items);
+    assert(ref $items eq 'ARRAY');
+
+    my $num_undef_links = 0;
+    for my $item (@$items) {
+        assert(defined $item);
+        assert(ref $item eq 'HASH');
+        assert(defined $item->{title});
+        ++$num_undef_links unless defined $item->{link};
+        $num_undef_links += _nav_menu_check_children($item->{children});
+    }
+
+    return $num_undef_links;
+}
+
+=item test_menu_item($item, $desc, $num_children, $url, $title, [$short_title])
+
+Run tests (using L<Test::More>) on the navigation menu item provided
+in C<$item> (which should be a hash of the type returned for each item
+by the
+L<navigation_menu|Daizu::Gen/$gen-E<gt>navigation_menu($file, $url)>
+method of generator classes).
+
+C<$desc> should be a short piece of text to use in the names of the tests.
+C<$num_children> is the number of children expected to be present in it
+(although they aren't checked, only the number of them is).  C<$url> is
+a string representation of the expected URL, which is likely to be a
+relative URL.  C<$title> and C<$short_title> are the expected 'title'
+and 'short_title' values, which may be undef if those values are expected
+to be missing.  If C<$short_title> isn't supplied (the argument is missing
+rather than undefined) then that won't be tested at all.
+
+The tests will be skipped with an appropriate warning if C<$item> is
+undefined.
+
+=cut
+
+sub test_menu_item
+{
+    my ($item, $desc, $num_children, $url, $title, $short_title) = @_;
+
+    SKIP: {
+        my $num_tests = @_ > 5 ? 4 : 3;
+        skip "expected menu item '$desc' doesn't exist", $num_tests
+            unless defined $item;
+        is($item->{link}, $url, "navigation_menu: $desc: link");
+        is($item->{title}, $title, "navigation_menu: $desc: title");
+        is(scalar @{$item->{children}}, $num_children,
+           "navigation_menu: $desc: num children");
+        is($item->{short_title}, $short_title,
+           "navigation_menu: $desc: short_title")
+            if @_ > 5;
+    }
+}
+
+=item test_cmp_guids($db, $wc_id, $desc, $got, @expected)
+
+Compare the array of GUID IDs referenced by C<$got> with the GUID IDs
+of the filenames listed in C<@expected>.  The order doesn't matter.
+C<$desc> is a string to put in the test descriptions.
+
+C<$got> may contain other GUID IDs which aren't expected, so you should
+check that you've got the right number as well as calling this.
+
+=cut
+
+sub test_cmp_guids
+{
+    my ($db, $wc_id, $desc, $got, @expected) = @_;
+    assert(@expected > 0);
+
+    for my $path (@expected) {
+        my $guid_id = db_select($db, 'wc_file',
+            { wc_id => $wc_id, path => $path },
+            'guid_id',
+        );
+        assert(defined $guid_id);
+
+        my $found;
+        for (@$got) {
+            next unless $_ == $guid_id;
+            $found = 1;
+            last;
+        }
+        ok($found, "$desc, update $path");
+    }
+}
+
+=item test_cmp_urls($desc, $got, @expected)
+
+Compare the URLs in the array referenced by C<$got> with the ones listed
+in C<@expected>.  In both cases they can be plain strings or L<URI> objects.
+The order they are given in doesn't matter.
+
+There must be at least one URL expected, and the number of ones in the
+two arrays is compared in the first test.
+
+=cut
+
+sub test_cmp_urls
+{
+    my ($desc, $got, @expected) = @_;
+    is(scalar @$got, scalar @expected, "$desc, num URLs");
+
+    for my $exp_url (@expected) {
+        $exp_url = URI->new($exp_url);
+
+        my $found;
+        for (@$got) {
+            next unless $exp_url->eq($_);
+            $found = 1;
+            last;
+        }
+        ok($found, "$desc, pub $exp_url");
+    }
 }
 
 =back

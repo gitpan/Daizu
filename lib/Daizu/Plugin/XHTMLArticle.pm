@@ -3,8 +3,8 @@ use warnings;
 use strict;
 
 use XML::LibXML;
-use File::Temp qw( tempfile );
 use Carp qw( croak );
+use Encode qw( decode );
 use Daizu::Util qw(
     url_encode daizu_data_dir
 );
@@ -83,30 +83,16 @@ sub load_article
     $parser->validation(0);
     $parser->line_numbers(1);
 
-    my $doc;
-    my ($fh, $tmpfilename) = tempfile();
-    eval {
-        my $xml_dir = url_encode(daizu_data_dir('xml'));
-        binmode $fh
-            or die "error setting file to binary mode: $!";
-        print $fh
-            '<?xml version="1.0" encoding="UTF-8"?>',
-            qq{<!DOCTYPE body SYSTEM "file://$xml_dir/xhtml-entities.dtd">},
-            qq{<body xmlns="http://www.w3.org/1999/xhtml"},
-                 qq{ xmlns:xi="http://www.w3.org/2001/XInclude"},
-                 qq{ xmlns:daizu="$Daizu::HTML_EXTENSION_NS">},
-            ${$file->data},
-            '</body>';
-        close $fh
-            or croak "error closing temp file '$tmpfilename': $!";
-
-        $doc = $parser->parse_file($tmpfilename);
-    };
-
-    my $err = $@;
-    unlink $tmpfilename
-        or warn "error deleting temp file '$tmpfilename': $!";
-    die "error parsing XHTML content of '$file->{path}': $err" if $err;
+    my $xml_dir = url_encode(daizu_data_dir('xml')->stringify);
+    my $doc = $parser->parse_string(
+        '<?xml version="1.0" encoding="UTF-8"?>' .
+        qq{<!DOCTYPE body SYSTEM "file://$xml_dir/xhtml-entities.dtd">} .
+        qq{<body xmlns="http://www.w3.org/1999/xhtml"} .
+             qq{ xmlns:xi="http://www.w3.org/2001/XInclude"} .
+             qq{ xmlns:daizu="$Daizu::HTML_EXTENSION_NS">} .
+        decode('UTF-8', ${$file->data}, Encode::FB_CROAK) .
+        '</body>'
+    );
 
     return { content => $doc };
 }

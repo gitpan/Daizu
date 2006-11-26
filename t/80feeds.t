@@ -108,6 +108,8 @@ for my $entry_elem (@elem) {
     # atom entry <content>
     (@elem) = $entry_elem->getChildrenByTagName('content');
     is(scalar @elem, 1, 'atom: one entry <content>');
+    is($elem[0]->getAttributeNS('http://www.w3.org/XML/1998/namespace', 'base'),
+       $exp_url, 'atom: entry <content> xml:base');
     my $content_elem = $elem[0];
     is($content_elem->getAttribute('type'), 'xhtml',
        'atom: entry <content> type');
@@ -115,8 +117,6 @@ for my $entry_elem (@elem) {
     is(scalar @elem, 1, 'atom: one entry <content><div>');
     is($elem[0]->namespaceURI, 'http://www.w3.org/1999/xhtml',
        'atom: entry <content><div> in XHTML namespace');
-    is($elem[0]->getAttributeNS('http://www.w3.org/XML/1998/namespace', 'base'),
-       $exp_url, 'atom: entry <content><div> xml:base');
 
     # Article 5 has a syntax highlighted bit in, but for the feed
     # content the <span> elements and 'class' attribute should be

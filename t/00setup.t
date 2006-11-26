@@ -18,6 +18,9 @@ assert($ra);
 my $db = create_database();
 assert($db);
 
+rmtree($Daizu::Test::TEST_OUTPUT_DIR)
+    if -e $Daizu::Test::TEST_OUTPUT_DIR;
+
 # Add people to the database, for usernames used in the test repository.
 db_insert($db, 'person', id => 1, username => 'geoff');
 db_insert($db, 'person_info',
@@ -67,8 +70,8 @@ db_insert($db, 'person_info',
     {
         my $test_repos_url = _xml_esc($Daizu::Test::TEST_REPOS_URL);
         $config =~ s/\@TEST_REPOS_URL\@/$test_repos_url/g;
-        my $test_docroot_dir = _xml_esc($Daizu::Test::TEST_DOCROOT_DIR);
-        $config =~ s/\@TEST_DOCROOT_DIR\@/$test_docroot_dir/g;
+        my $test_output_dir = _xml_esc($Daizu::Test::TEST_OUTPUT_DIR);
+        $config =~ s/\@TEST_OUTPUT_DIR\@/$test_output_dir/g;
     }
 
     open my $config_file, '>', 'test-config.xml'

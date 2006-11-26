@@ -4,7 +4,7 @@ use strict;
 
 =head1 NAME
 
-upgrade-0.1-0.2.pl - upgrade the database for a S<Daizu 0.1> installation to work with S<Daizu 0.2>
+upgrade.pl - upgrade the database for a S<Daizu 0.1> installation to work with S<Daizu 0.2>
 
 =head1 DESCRIPTION
 

@@ -11,14 +11,13 @@ our @EXPORT_OK = qw(
     db_row_exists db_row_id db_select db_select_col
     db_insert db_update db_replace db_delete transactionally
     wc_file_data guess_mime_type wc_set_file_data mint_guid
-    guid_first_last_times
+    guid_first_last_times get_subversion_properties
     load_class instantiate_generator
-    update_all_file_urls
+    update_all_file_urls aggregate_map_changes
     add_xml_elem xml_attr xml_croak expand_xinclude
     branch_id daizu_data_dir
 );
 
-use Data::Validate::URI qw( is_uri );
 use URI;
 use DateTime;
 use DateTime::Format::Pg;
@@ -176,8 +175,13 @@ sub validate_number
 
 =item validate_uri($uri)
 
-Return a L<URI> object representing C<$uri>, or C<undef> if it isn't defined
-or if it is invalid.
+Return a L<URI> object representing the absolute URI in C<$uri>, or undef
+if it isn't defined, is invalid, or isn't absolute.
+
+This is based on code from the L<Data::Validate::URI> module, but it has
+been changed to only allow absolute URIs, and it doesn't try to reconstruct
+the URI from it individual parts (something which the URI module can do
+instead).
 
 =cut
 
@@ -185,7 +189,30 @@ sub validate_uri
 {
     my ($uri) = @_;
     $uri = trim($uri);
-    return unless defined is_uri($uri);
+    return undef unless defined $uri;
+
+    # Check for illegal characters.
+    return undef if $uri =~ /[^-a-zA-Z0-9:\/?#[\]@!\$&'()*+,;=._~]/;
+
+    my ($scheme, $authority, $path, $query) = $uri =~ m{
+        \A
+        (?: ([a-zA-Z][-+.a-zA-Z0-9]*) :)    # scheme (required)
+        (?: // ([^/?#]*) )?                 # authority (optional)
+        ([^?#]*)                            # path (including domain, etc.)
+        (?: \? ([^#]*) )?                   # query string (optional)
+        (?: \# .* )?                        # fragment (optional)
+        \z
+    }x;
+    return undef unless defined $scheme;
+
+    # If authority is present, the path must be empty or begin with a '/'.
+    if (defined $authority && length $authority) {
+        return undef unless $path eq '' || $path =~ m!^/!;
+    }
+    else {
+        # If authority is not present, the path must not start with '//'.
+        return undef if $path =~ m!^//!;
+    }
 
     return URI->new($uri);
 }
@@ -813,6 +840,37 @@ sub guid_first_last_times
     return (parse_db_datetime($issued), parse_db_datetime($modified));
 }
 
+=item get_subversion_properties($ra, $path, $revnum)
+
+Returns a reference to a hash of properties for the file at C<$path>
+(a full path within the Subversion repository, including branch path)
+in revision C<$revnum>.  C<$ra> should be a L<SVN::Ra> object.
+
+Returns undef if the file doesn't exist.
+
+=cut
+
+sub get_subversion_properties
+{
+    my ($ra, $path, $revnum) = @_;
+
+    my $stat = $ra->stat($path, $revnum);
+    return undef unless defined $stat;
+
+    # When accessing a remote repository the 'get_file' method doesn't
+    # work on directories, although for some reason it does with a local
+    # 'file:' repository.
+    my $props;
+    if ($stat->kind == $SVN::Node::dir) {
+        (undef, undef, $props) = $ra->get_dir($path, $revnum);
+    }
+    else {
+        (undef, $props) = $ra->get_file($path, $revnum, undef);
+    }
+
+    return $props;
+}
+
 =item wc_set_file_data($cms, $wc_id, $file_id, $content_type, $data, $allow_data_ref)
 
 Warning: this should currently only be used for proper updates from the
@@ -1005,15 +1063,21 @@ sub instantiate_generator
 =item update_all_file_urls($cms, $wc_id)
 
 Updates the C<url> table in the same way as the L<Daizu::File> method
-L<update_urls_in_db()|Daizu::File/$file-E<gt>update_urls_in_db>, except that
+L<update_urls_in_db()|Daizu::File/$file-E<gt>update_urls_in_db([$dup_urls])>,
+except that
 it does so for all files in working copy C<$wc_id>, and the return
 values are each true if I<any> of the changes include new or updated
 redirects or 'gone' files.
 
-Any URLs for files which no longer exist in the working copy are marked
-as 'gone'.
+Any active URLs for files which no longer exist in the working copy are marked
+as 'gone'.  This function also takes care of handling temporary duplicate
+URLs which occur during the update, when one file adds a new URL which is
+already active for another file, but will be inactive by the end of the
+transaction.
 
 All of this is done in a single database transaction.
+
+TODO - update docs about new return value
 
 =cut
 
@@ -1030,18 +1094,27 @@ sub update_all_file_urls
         });
         $sth->execute($wc_id);
 
-        my ($redirects_changed, $gone_changed);
+        # These are aggregate versions of the same variables as in the
+        # update_urls_in_db() function in Daizu::File.  Look there for
+        # details of what they mean.
+        my (%redirects_changed, %gone_changed);
+
+        my %dup_urls;
         while (my ($file_id) = $sth->fetchrow_array) {
             my $file = Daizu::File->new($cms, $file_id);
-            my ($rc, $gc) = $file->update_urls_in_db;
-            $redirects_changed = 1 if $rc;
-            $gone_changed = 1 if $gc;
+            my $changes = $file->update_urls_in_db(\%dup_urls);
+
+            aggregate_map_changes($changes, \%redirects_changed,
+                                  \%gone_changed);
         }
 
+        resolve_url_update_duplicates($db, $wc_id, \%dup_urls);
+
+        # Any other active URLs which belong to files that no longer exist
+        # should be deactivated.
         $db->do(q{
             update url
-            set status = 'G',
-                redirect_to_id = null
+            set status = 'G'
             where wc_id = ?
               and guid_id in (
                 select u.guid_id
@@ -1049,12 +1122,72 @@ sub update_all_file_urls
                 left outer join wc_file f on f.wc_id = u.wc_id and
                                              f.guid_id = u.guid_id
                 where u.wc_id = ?
+                  and u.status = 'A'
                   and f.id is null
               )
         }, undef, $wc_id, $wc_id);
 
-        return ($redirects_changed, $gone_changed);
+        return {
+            update_redirect_maps => \%redirects_changed,
+            update_gone_maps => \%gone_changed,
+        };
     });
+}
+
+=item resolve_url_update_duplicates($db, $wc_id, $dup_urls)
+
+TODO
+
+=cut
+
+sub resolve_url_update_duplicates
+{
+    my ($db, $wc_id, $dup_urls) = @_;
+
+    # If there are any new active URLs which still clash with old
+    # active ones, the old ones may belong to files which no longer
+    # exist in the working copy.  Either way, resolve the duplicates.
+    while (my ($url, $dup) = each %$dup_urls) {
+        my $orig_guid_id = db_select($db, url => $dup->{id}, 'guid_id');
+        my $file_still_exists = db_row_exists($db, 'wc_file',
+            wc_id => $wc_id,
+            guid_id => $orig_guid_id,
+        );
+
+        if ($file_still_exists) {
+            croak "new URL '$url' would conflict with existing URL";
+        }
+        else {
+            db_update($db, url => $dup->{id},
+                guid_id => $dup->{guid_id},
+                generator => $dup->{generator},
+                method => $dup->{method},
+                argument => $dup->{argument},
+                content_type => $dup->{type},
+            );
+        }
+    }
+}
+
+=item aggregate_map_changes($changes, $redirects_changed, $gone_changed)
+
+TODO
+
+=cut
+
+sub aggregate_map_changes
+{
+    my ($changes, $redirects_changed, $gone_changed) = @_;
+
+    while (my ($file, $conf) = each %{$changes->{update_redirect_maps}}) {
+        next if exists $redirects_changed->{$file};
+        $redirects_changed->{$file} = $conf;
+    }
+
+    while (my ($file, $conf) = each %{$changes->{update_gone_maps}}) {
+        next if exists $gone_changed->{$file};
+        $gone_changed->{$file} = $conf;
+    }
 }
 
 =item add_xml_elem($parent, $name, $content, %attr)

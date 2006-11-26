@@ -5,7 +5,7 @@ meta-spec:
     url: http://module-build.sourceforge.net/META-spec-v1.2.html
 
 name: Daizu
-version: 0.2
+version: 0.3
 abstract: Web publishing system built on Subversion
 license: gpl
 
@@ -14,13 +14,12 @@ resources:
     license: http://www.gnu.org/licenses/gpl.html
 
 author:
-    - Geoff Richards <geoff@laxan.com>
+    - 'Geoff Richards <geoff@laxan.com>'
 
 requires:
     Carp::Assert: 0
     Compress::Zlib: 0
     DBD::Pg: 0
-    Data::Validate::URI: 0.01
     DateTime: 0
     DateTime::Format::Pg: 0.08
     Digest::SHA1: 0
@@ -38,7 +37,6 @@ requires:
 
 build_requires:
     Module::Build: 0
-    IO::Scalar: 0
 
 optional_features:
     - syntax-highlight:
@@ -49,6 +47,10 @@ optional_features:
         description: Publish pictures as articles, with automatic thumbnails
         requires:
             Image::Magick: 0
+    - related-links:
+        description: Add a Related Links box to pages for articles
+        requires:
+            Template::Plugin::Class: 0
 
 no_index:
     file:

@@ -269,8 +269,6 @@ sub load_article
     $img->setAttribute(src => ($thm_exists ? $thm_filename : $file->{name}));
 
     my $alt = $file->property('daizu:alt');
-    $alt = decode('UTF-8', $alt, Encode::FB_CROAK)
-        if defined $alt;
     $img->setAttribute(alt => (defined $alt ? $alt : ''));
 
     $img->setAttribute(width => $thm_wd) if $thm_wd;
@@ -280,14 +278,15 @@ sub load_article
         class => 'display-picture',
     );
     if ($thm_exists) {
-        add_xml_elem($img_block, 'a', $img, href => $file->{name});
-        add_xml_elem($img_block, 'br');
+        my $link = add_xml_elem($img_block, 'a', $img, href => $file->{name});
+        add_xml_elem($link, 'br');
         # Since we're linking to the full size image, provide some details
         # about it, mainly as a warning if it's really big.
-        my $TIMES = encode('UTF-8', "\xD7");
-        my $desc = "full size: $pic_wd$TIMES$pic_ht, " .
-                   display_byte_size($file->{data_len});
-        add_xml_elem($img_block, 'a', $desc, href => $file->{name});
+        my $desc = " ($pic_wd\xD7$pic_ht, " .
+                   display_byte_size($file->{data_len}) .
+                   ')';
+        $link->appendText('Full size image');
+        $img_block->appendText(encode('UTF-8', $desc, Encode::FB_CROAK));
     }
     else {
         # Don't provide a link to the image if it's the same file as we're

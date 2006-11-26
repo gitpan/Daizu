@@ -21,10 +21,14 @@ Daizu::File	http://www.daizucms.org/doc/api/Daizu/File.html
 Daizu::Gen	http://www.daizucms.org/doc/api/Daizu/Gen.html
 Daizu::Gen::Blog	http://www.daizucms.org/doc/api/Daizu/Gen/Blog.html
 Daizu::HTML	http://www.daizucms.org/doc/api/Daizu/HTML.html
+Daizu::Plugin::DisplayPicture	http://www.daizucms.org/doc/api/Daizu/Plugin/DisplayPicture.html
 Daizu::Plugin::HeaderAnchor	http://www.daizucms.org/doc/api/Daizu/Plugin/HeaderAnchor.html
+Daizu::Plugin::ImageMetadata	http://www.daizucms.org/doc/api/Daizu/Plugin/ImageMetadata.html
 Daizu::Plugin::PictureArticle	http://www.daizucms.org/doc/api/Daizu/Plugin/PictureArticle.html
 Daizu::Plugin::PodArticle	http://www.daizucms.org/doc/api/Daizu/Plugin/PodArticle.html
+Daizu::Plugin::RelatedLinks	http://www.daizucms.org/doc/api/Daizu/Plugin/RelatedLinks.html
 Daizu::Plugin::SyntaxHighlight	http://www.daizucms.org/doc/api/Daizu/Plugin/SyntaxHighlight.html
+Daizu::Plugin::XHTMLArticle	http://www.daizucms.org/doc/api/Daizu/Plugin/XHTMLArticle.html
 Daizu::Preview	http://www.daizucms.org/doc/api/Daizu/Preview.html
 Daizu::Publish	http://www.daizucms.org/doc/api/Daizu/Publish.html
 Daizu::Publish::Editor	http://www.daizucms.org/doc/api/Daizu/Publish/Editor.html

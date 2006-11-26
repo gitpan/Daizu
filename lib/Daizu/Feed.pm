@@ -322,10 +322,10 @@ sub add_entry
         if ($self->{type} ne 'description') {
             my $content_elem = add_xml_elem($entry, content => undef,
                 type => 'xhtml',
+                'xml:base' => $article_url,
             );
             my $div = $doc->createElementNS('http://www.w3.org/1999/xhtml',
                                             'div');
-            $div->setAttribute('xml:base' => $article_url);
             $content_elem->appendChild($div);
             my $content = $self->{type} eq 'snippet' ? $file->article_snippet
                                                      : $file->article_doc;

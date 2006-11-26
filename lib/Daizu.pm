@@ -5,6 +5,7 @@ use strict;
 use XML::LibXML;
 use DBI;
 use SVN::Ra;
+use Path::Class qw( dir );
 use Carp qw( croak );
 use Carp::Assert qw( assert DEBUG );
 use Daizu::Revision;
@@ -13,7 +14,8 @@ use Daizu::Util qw(
     trim trim_with_empty_null
     validate_number validate_uri validate_mime_type
     validate_date db_datetime
-    db_row_exists db_select db_insert db_update db_delete
+    db_row_exists db_row_id db_select db_insert db_update db_delete
+    wc_file_data
     guid_first_last_times
     load_class
     xml_attr xml_croak
@@ -84,12 +86,12 @@ Value: C<_template|_hide>
 
 =cut
 
-our $VERSION = '0.2';
+our $VERSION = '0.3';
 
 our $DEFAULT_CONFIG_FILENAME = '/etc/daizu/config.xml';
 our $CONFIG_NS = 'http://www.daizucms.org/ns/config/';
 our $HTML_EXTENSION_NS = 'http://www.daizucms.org/ns/html-extension/';
-our $HIDING_FILENAMES = '_template|_hide';
+our $HIDING_FILENAMES = '_template|_hide|_lib';
 
 =item %OVERRIDABLE_PROPERTY
 
@@ -125,6 +127,11 @@ the documentation on the website:
 L<http://www.daizucms.org/doc/config-file/>
 
 =cut
+
+# This ensures that @INC is only fiddled with once for each Daizu installation.
+# The keys are the URIs of content repositories.  If an entry exists for a
+# particular repository, then its _lib directory has already been added.
+my %added_lib_path;
 
 sub new
 {
@@ -172,10 +179,32 @@ sub new
     }
 
     # Open Subversion remote-access connection.
+    my $svn_url;
     {
         my $elem = _singleton_conf_elem($filename, $root, 'repository');
-        my $url = xml_attr($filename, $elem, 'url');
-        $self->{ra} = SVN::Ra->new(url => $url);
+        $svn_url = xml_attr($filename, $elem, 'url');
+        my $svn_username = xml_attr($filename, $elem, 'username', '');
+        my $svn_password = xml_attr($filename, $elem, 'password', '');
+
+        my $auth_callback = sub {
+            my ($creds, $realm, $default_username, $may_save, $pool) = @_;
+
+            $creds->username($svn_username);
+            $creds->password($svn_password);
+
+            # There's no real reason to cache this stuff since we can always
+            # get it from the config files, so we don't cache to avoid
+            # confusion, and in case we're running as a special user with
+            # a home directory we can't write to.
+            $creds->may_save(0);
+        };
+
+        $self->{ra} = SVN::Ra->new(
+            url => $svn_url,
+            ($svn_username eq '' && $svn_password eq '' ? () : (auth => [
+                SVN::Client::get_simple_prompt_provider($auth_callback, 0),
+            ])),
+        );
     }
 
     # Get live working copy ID.
@@ -187,14 +216,48 @@ sub new
             unless defined $self->{live_wc_id};
     }
 
+    # Path to directory containing the default templates distributed with
+    # Daizu, and possibly also to a directory where templates should be
+    # loaded during testing instead of from the database.
+    {
+        $self->{template_default_path} = daizu_data_dir('template');
+        my ($elem) = $root->getChildrenByTagNameNS($CONFIG_NS, 'template-test');
+        $self->{template_test_path} = xml_attr($filename, $elem, 'path')
+            if defined $elem;
+    }
+
+    # Add to @INC the '_lib' directory from the content repository, either
+    # by loading files from the live working copy, or from the 'template-test'
+    # path.
+    unless (exists $added_lib_path{$svn_url}) {
+        if (defined $self->{template_test_path}) {
+            push @INC, dir($self->{template_test_path})->subdir('_lib')
+                                                       ->stringify;
+        }
+        else {
+            push @INC, sub {
+                my (undef, $filename) = @_;
+                my $file_id = db_row_id($self->{db}, 'wc_file',
+                    wc_id => $self->{live_wc_id},
+                    path => "_lib/$filename",
+                );
+                return undef unless defined $file_id;
+                my $data = wc_file_data($self->{db}, $file_id);
+                open my $fh, '<', $data
+                    or die "error opening memory file for '_lib/$filename': $!";
+                return $fh;
+            };
+        }
+
+        $added_lib_path{$svn_url} = undef;
+    }
+
     # How output should be published.
     for my $elem ($root->getChildrenByTagNameNS($CONFIG_NS, 'output')) {
         my $url = trim(xml_attr($filename, $elem, 'url'));
         my $path = trim(xml_attr($filename, $elem, 'path'));
         my $url_ob = validate_uri($url);
         xml_croak($filename, $elem, "<output> has invalid URL '$url'")
-            unless defined $url_ob;
-        xml_croak($filename, $elem, "<output> has non-absolute URL '$url'")
             unless defined $url_ob;
         xml_croak($filename, $elem, "<output> has non-HTTP URL '$url'")
             unless defined $url_ob->scheme && $url_ob->scheme =~ /^https?/i;
@@ -206,6 +269,17 @@ sub new
         my $gone_map = trim(xml_attr($filename, $elem, 'gone-map', ''));
         for ($redirect_map, $gone_map) {
             $_ = undef if $_ eq '';
+            next unless defined;
+
+            # Check for duplicate filenames.
+            while (my ($other_url, $config) = each %{$self->{output}}) {
+                for my $map (qw( redirect gone )) {
+                    xml_croak($filename, $elem, "filename '$_' duplicates" .
+                              " '$map-map' for '$other_url' config")
+                        if defined $config->{"${map}_map"} &&
+                           $config->{"${map}_map"} eq $_;
+                }
+            }
         }
 
         my $index_filename = trim(xml_attr($filename, $elem, 'index-filename',
@@ -218,16 +292,6 @@ sub new
             gone_map => $gone_map,
             index_filename => $index_filename,
         };
-    }
-
-    # Path to directory containing the default templates distributed with
-    # Daizu, and possibly also to a directory where templates should be
-    # loaded during testing instead of from the database.
-    {
-        $self->{template_default_path} = daizu_data_dir('template');
-        my ($elem) = $root->getChildrenByTagNameNS($CONFIG_NS, 'template-test');
-        $self->{template_test_path} = xml_attr($filename, $elem, 'path')
-            if defined $elem;
     }
 
     # Initialize hooks for plugins.
@@ -513,10 +577,15 @@ sub add_article_loader
 
 Plugins can use this to register a method which will be called whenever
 an XHTML file is being published.  C<$method> (a method name) will be
-called on C<$object>, and will be passed C<$cms> and an XML DOM object
+called on C<$object>, and will be passed C<$cms>, a L<Daizu::File> object
+for the file being filtered, and an XML DOM object
 of the source, as a L<XML::LibXML::Document> object.  The plugin method
-should return a similar object, either a completely new copy of the DOM
+should return a reference to a hash containing a C<content> value which
+is the filtered content, either a completely new copy of the DOM
 or the same value it was passed (which it might have modified in place).
+
+The returned hash can also contain an C<extra_urls> array, in the same
+way as an article loader, if the filter adds additional URLs for the file.
 
 The plugin registered will only be called on for files with paths which
 are the same as, or are under the directory specified by, C<$path>.
